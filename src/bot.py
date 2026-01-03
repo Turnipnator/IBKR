@@ -14,6 +14,7 @@ import signal
 import sys
 from datetime import datetime, time as dtime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from .connection import ConnectionManager
 from .engine import DecisionEngine
@@ -36,6 +37,7 @@ class TradingBot:
     # US Market hours (Eastern Time)
     MARKET_OPEN = dtime(9, 30)
     MARKET_CLOSE = dtime(16, 0)
+    US_EASTERN = ZoneInfo("America/New_York")
 
     def __init__(
         self,
@@ -74,14 +76,15 @@ class TradingBot:
         self.running = False
 
     def _is_market_hours(self) -> bool:
-        """Check if currently within US market hours."""
-        now = datetime.now()
+        """Check if currently within US market hours (Eastern Time)."""
+        # Get current time in US Eastern, regardless of server timezone
+        now_et = datetime.now(self.US_EASTERN)
 
         # Skip weekends
-        if now.weekday() >= 5:
+        if now_et.weekday() >= 5:
             return False
 
-        current_time = now.time()
+        current_time = now_et.time()
         return self.MARKET_OPEN <= current_time <= self.MARKET_CLOSE
 
     def connect(self) -> bool:
