@@ -73,8 +73,8 @@ TRADING_UNIVERSE = {
 
 ### VPS Details
 - **Provider**: Contabo
-- **IP**: 149.102.144.190
-- **SSH Key**: `~/.ssh/id_ed25519_vps`
+- **IP**: Set in local environment (not committed)
+- **SSH Key**: Set in local environment (not committed)
 - **Project Path**: `/root/IBKR_Bot`
 - **Network Mode**: Host (both containers share localhost)
 
@@ -86,8 +86,8 @@ TRADING_UNIVERSE = {
 ### Common Commands
 
 ```bash
-# SSH to VPS
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190
+# SSH to VPS (replace with your details)
+ssh -i <YOUR_SSH_KEY> root@<YOUR_VPS_IP>
 
 # On VPS - Container management
 cd /root/IBKR_Bot
@@ -97,13 +97,13 @@ docker compose logs trading-bot --tail=50  # Bot logs
 docker compose restart trading-bot         # Restart bot only
 docker compose down && docker compose up -d  # Full restart
 
-# Sync code changes to VPS
-rsync -avz -e "ssh -i ~/.ssh/id_ed25519_vps" \
-  /Users/paulturner/IBKR_Bot/src/ \
-  root@149.102.144.190:/root/IBKR_Bot/src/
+# Sync code changes to VPS (replace with your details)
+rsync -avz -e "ssh -i <YOUR_SSH_KEY>" \
+  /path/to/IBKR_Bot/src/ \
+  root@<YOUR_VPS_IP>:/root/IBKR_Bot/src/
 
 # Rebuild after code changes
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 \
+ssh -i <YOUR_SSH_KEY> root@<YOUR_VPS_IP> \
   "cd /root/IBKR_Bot && docker compose build trading-bot && docker compose up -d trading-bot"
 ```
 
