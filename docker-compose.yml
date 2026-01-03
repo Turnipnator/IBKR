@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # IB Gateway - headless IBKR connection
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ib-gateway
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      # IBKR Credentials (set in .env file)
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: ${IBKR_TRADING_MODE:-paper}  # paper or live
+      TWS_ACCEPT_INCOMING: "accept"
+      READ_ONLY_API: "no"
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+      # Handle existing session - take over from local TWS
+      EXISTING_SESSION_DETECTED_ACTION: "primary"
+      TWOFA_TIMEOUT_ACTION: "restart"
+    volumes:
+      - ib-gateway-data:/home/ibgateway/Jts
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/4002'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # Trading Bot
+  trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-bot
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      ib-gateway:
+        condition: service_healthy
+    environment:
+      # IBKR Connection (connect via localhost since using host network)
+      IBKR_HOST: 127.0.0.1
+      IBKR_PORT: ${IBKR_PORT:-4002}  # 4002 for paper, 4001 for live
+      IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # Paths
+      DB_PATH: /app/data/trading.db
+      LOG_PATH: /app/logs/trading.log
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["python", "-m", "src.bot", "--interval", "60"]
+
+volumes:
+  ib-gateway-data:
