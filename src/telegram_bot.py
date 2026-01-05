@@ -238,6 +238,125 @@ Bot is now monitoring the market.
 """
         return self.send_sync(message.strip())
 
+    # ==================== Paper Trade Notifications ====================
+
+    def notify_paper_trade_opened(
+        self,
+        trade_id: int,
+        symbol: str,
+        action: str,
+        quantity: int,
+        entry_price: float,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+    ) -> bool:
+        """Send notification when a paper trade is opened."""
+        emoji = "\U0001F4DD"  # Memo/paper
+
+        sl_text = f"${stop_loss:,.2f}" if stop_loss else "N/A"
+        tp_text = f"${take_profit:,.2f}" if take_profit else "N/A"
+        value = quantity * entry_price
+
+        message = f"""
+{emoji} <b>Paper Trade Opened</b> #{trade_id}
+
+<b>Symbol:</b> {symbol}
+<b>Action:</b> {action}
+<b>Size:</b> {quantity:,} shares @ ${entry_price:,.2f}
+<b>Value:</b> ${value:,.2f}
+
+<b>Stop Loss:</b> {sl_text}
+<b>Take Profit:</b> {tp_text}
+
+<i>Tracking this trade to measure performance...</i>
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
+    def notify_paper_trade_closed(
+        self,
+        trade_id: int,
+        symbol: str,
+        action: str,
+        quantity: int,
+        entry_price: float,
+        exit_price: float,
+        pnl_amount: float,
+        pnl_percent: float,
+        exit_reason: str,  # CLOSED_TP, CLOSED_SL, CLOSED_MANUAL
+    ) -> bool:
+        """Send notification when a paper trade is closed."""
+        # Determine emoji and result text based on outcome
+        if pnl_amount > 0:
+            emoji = "\U0001F4B0"  # Money bag (profit)
+            result = "PROFIT"
+        elif pnl_amount < 0:
+            emoji = "\U0001F4C9"  # Chart down (loss)
+            result = "LOSS"
+        else:
+            emoji = "\U0001F7F0"  # Grey equals
+            result = "BREAK EVEN"
+
+        # Exit reason text
+        reason_text = {
+            "CLOSED_TP": "Take Profit Hit",
+            "CLOSED_SL": "Stop Loss Hit",
+            "CLOSED_MANUAL": "Manual Close",
+        }.get(exit_reason, exit_reason)
+
+        pnl_sign = "+" if pnl_amount >= 0 else ""
+
+        message = f"""
+{emoji} <b>Paper Trade Closed</b> #{trade_id} - {result}
+
+<b>Symbol:</b> {symbol}
+<b>Action:</b> {action}
+<b>Size:</b> {quantity:,} shares
+
+<b>Entry:</b> ${entry_price:,.2f}
+<b>Exit:</b> ${exit_price:,.2f}
+<b>Reason:</b> {reason_text}
+
+<b>P&L:</b> {pnl_sign}${pnl_amount:,.2f} ({pnl_sign}{pnl_percent:.1f}%)
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
+    def notify_paper_trade_stats(
+        self,
+        total_trades: int,
+        open_trades: int,
+        closed_trades: int,
+        winning_trades: int,
+        losing_trades: int,
+        total_pnl: float,
+        win_rate: float,
+    ) -> bool:
+        """Send paper trading statistics summary."""
+        emoji = "\U0001F4CA"  # Chart
+
+        pnl_emoji = "\U0001F7E2" if total_pnl >= 0 else "\U0001F534"
+        pnl_sign = "+" if total_pnl >= 0 else ""
+
+        message = f"""
+{emoji} <b>Paper Trading Stats</b>
+
+<b>Total Trades:</b> {total_trades}
+<b>Open:</b> {open_trades}
+<b>Closed:</b> {closed_trades}
+
+<b>Winners:</b> {winning_trades}
+<b>Losers:</b> {losing_trades}
+<b>Win Rate:</b> {win_rate:.1f}%
+
+{pnl_emoji} <b>Total P&L:</b> {pnl_sign}${total_pnl:,.2f}
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
 
 # Singleton notifier instance
 _notifier: Optional[TelegramNotifier] = None

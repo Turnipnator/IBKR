@@ -83,6 +83,29 @@ class Database:
                     currency TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                -- Paper trades for tracking dry run performance
+                CREATE TABLE IF NOT EXISTS paper_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    action TEXT NOT NULL,  -- BUY or SELL
+                    quantity INTEGER NOT NULL,
+                    entry_price REAL NOT NULL,
+                    stop_loss REAL,
+                    take_profit REAL,
+                    status TEXT DEFAULT 'OPEN',  -- OPEN, CLOSED_TP, CLOSED_SL, CLOSED_MANUAL
+                    exit_price REAL,
+                    pnl_amount REAL,
+                    pnl_percent REAL,
+                    reasons TEXT,  -- JSON list of reasons
+                    entry_time TEXT NOT NULL,
+                    exit_time TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- Index for faster queries on open paper trades
+                CREATE INDEX IF NOT EXISTS idx_paper_trades_status
+                ON paper_trades(status);
             """)
             conn.commit()
             logger.info(f"Database initialized at {self.db_path}")
@@ -268,5 +291,184 @@ class Database:
             """, (symbol,))
             row = cursor.fetchone()
             return (row[0], row[1]) if row else (None, None)
+        finally:
+            conn.close()
+
+    # ==================== Paper Trade Methods ====================
+
+    def save_paper_trade(
+        self,
+        symbol: str,
+        action: str,
+        quantity: int,
+        entry_price: float,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        reasons: Optional[list[str]] = None,
+    ) -> int:
+        """
+        Save a new paper trade.
+
+        Returns:
+            The ID of the created paper trade
+        """
+        import json
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("""
+                INSERT INTO paper_trades
+                (symbol, action, quantity, entry_price, stop_loss, take_profit, reasons, entry_time, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
+            """, (
+                symbol,
+                action,
+                quantity,
+                entry_price,
+                stop_loss,
+                take_profit,
+                json.dumps(reasons) if reasons else None,
+                datetime.now().isoformat(),
+            ))
+            conn.commit()
+            trade_id = cursor.lastrowid
+            logger.info(f"Saved paper trade #{trade_id}: {action} {quantity} {symbol} @ ${entry_price:.2f}")
+            return trade_id
+        finally:
+            conn.close()
+
+    def get_open_paper_trades(self) -> list[dict]:
+        """Get all open paper trades."""
+        import json
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("""
+                SELECT * FROM paper_trades WHERE status = 'OPEN' ORDER BY entry_time DESC
+            """)
+            trades = []
+            for row in cursor.fetchall():
+                trade = dict(row)
+                if trade.get('reasons'):
+                    trade['reasons'] = json.loads(trade['reasons'])
+                trades.append(trade)
+            return trades
+        finally:
+            conn.close()
+
+    def close_paper_trade(
+        self,
+        trade_id: int,
+        exit_price: float,
+        status: str,  # CLOSED_TP, CLOSED_SL, CLOSED_MANUAL
+    ) -> dict:
+        """
+        Close a paper trade and calculate P&L.
+
+        Returns:
+            Dict with trade details including P&L
+        """
+        import json
+        conn = self._get_connection()
+        try:
+            # Get the trade
+            cursor = conn.execute("SELECT * FROM paper_trades WHERE id = ?", (trade_id,))
+            row = cursor.fetchone()
+            if not row:
+                return {}
+
+            trade = dict(row)
+            entry_price = trade['entry_price']
+            quantity = trade['quantity']
+            action = trade['action']
+
+            # Calculate P&L (for BUY: profit if exit > entry)
+            if action == 'BUY':
+                pnl_amount = (exit_price - entry_price) * quantity
+                pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+            else:  # SELL (short)
+                pnl_amount = (entry_price - exit_price) * quantity
+                pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+
+            # Update the trade
+            conn.execute("""
+                UPDATE paper_trades
+                SET status = ?, exit_price = ?, pnl_amount = ?, pnl_percent = ?, exit_time = ?
+                WHERE id = ?
+            """, (status, exit_price, pnl_amount, pnl_percent, datetime.now().isoformat(), trade_id))
+            conn.commit()
+
+            trade['status'] = status
+            trade['exit_price'] = exit_price
+            trade['pnl_amount'] = pnl_amount
+            trade['pnl_percent'] = pnl_percent
+            if trade.get('reasons'):
+                trade['reasons'] = json.loads(trade['reasons'])
+
+            logger.info(f"Closed paper trade #{trade_id}: {status} @ ${exit_price:.2f} (P&L: ${pnl_amount:.2f} / {pnl_percent:.1f}%)")
+            return trade
+        finally:
+            conn.close()
+
+    def get_paper_trade_stats(self) -> dict:
+        """Get summary statistics for paper trades."""
+        conn = self._get_connection()
+        try:
+            stats = {
+                'total_trades': 0,
+                'open_trades': 0,
+                'closed_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
+                'total_pnl': 0.0,
+                'win_rate': 0.0,
+                'avg_win': 0.0,
+                'avg_loss': 0.0,
+            }
+
+            # Count trades
+            cursor = conn.execute("SELECT COUNT(*) FROM paper_trades")
+            stats['total_trades'] = cursor.fetchone()[0]
+
+            cursor = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE status = 'OPEN'")
+            stats['open_trades'] = cursor.fetchone()[0]
+
+            cursor = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE status != 'OPEN'")
+            stats['closed_trades'] = cursor.fetchone()[0]
+
+            # P&L stats
+            cursor = conn.execute("""
+                SELECT COUNT(*), SUM(pnl_amount), AVG(pnl_amount)
+                FROM paper_trades WHERE status != 'OPEN' AND pnl_amount > 0
+            """)
+            row = cursor.fetchone()
+            stats['winning_trades'] = row[0] or 0
+            stats['avg_win'] = row[2] or 0.0
+
+            cursor = conn.execute("""
+                SELECT COUNT(*), SUM(pnl_amount), AVG(pnl_amount)
+                FROM paper_trades WHERE status != 'OPEN' AND pnl_amount <= 0
+            """)
+            row = cursor.fetchone()
+            stats['losing_trades'] = row[0] or 0
+            stats['avg_loss'] = row[2] or 0.0
+
+            cursor = conn.execute("SELECT SUM(pnl_amount) FROM paper_trades WHERE status != 'OPEN'")
+            stats['total_pnl'] = cursor.fetchone()[0] or 0.0
+
+            if stats['closed_trades'] > 0:
+                stats['win_rate'] = (stats['winning_trades'] / stats['closed_trades']) * 100
+
+            return stats
+        finally:
+            conn.close()
+
+    def has_open_paper_trade(self, symbol: str) -> bool:
+        """Check if there's already an open paper trade for a symbol."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM paper_trades WHERE symbol = ? AND status = 'OPEN'",
+                (symbol,)
+            )
+            return cursor.fetchone()[0] > 0
         finally:
             conn.close()

@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from .connection import ConnectionManager
 from .engine import DecisionEngine
+from .database import Database
 from .config import ibkr_config, telegram_config
 from .telegram_bot import TelegramNotifier, get_notifier
 
@@ -63,6 +64,9 @@ class TradingBot:
             dry_run=dry_run,
         )
 
+        # Database for paper trade tracking
+        self.db = Database()
+
         # Telegram notifications
         self.notifier = get_notifier() if enable_telegram else None
 
@@ -86,6 +90,83 @@ class TradingBot:
 
         current_time = now_et.time()
         return self.MARKET_OPEN <= current_time <= self.MARKET_CLOSE
+
+    def _check_paper_trades(self) -> int:
+        """
+        Check open paper trades against current prices.
+        Close any that hit stop loss or take profit.
+
+        Returns:
+            Number of paper trades closed
+        """
+        open_trades = self.db.get_open_paper_trades()
+        if not open_trades:
+            return 0
+
+        closed_count = 0
+        logger.info(f"Checking {len(open_trades)} open paper trades...")
+
+        for trade in open_trades:
+            symbol = trade['symbol']
+            trade_id = trade['id']
+            entry_price = trade['entry_price']
+            stop_loss = trade['stop_loss']
+            take_profit = trade['take_profit']
+
+            # Get current price
+            try:
+                df = self.engine.fetcher.get_historical_data(
+                    symbol, duration="1 D", bar_size="1 min"
+                )
+                if df is None or df.empty:
+                    continue
+
+                current_price = float(df['close'].iloc[-1])
+            except Exception as e:
+                logger.warning(f"Could not get price for {symbol}: {e}")
+                continue
+
+            # Check stop loss (for BUY trades, price drops below SL)
+            if stop_loss and current_price <= stop_loss:
+                result = self.db.close_paper_trade(trade_id, current_price, "CLOSED_SL")
+                closed_count += 1
+                logger.info(f"Paper trade #{trade_id} {symbol} hit STOP LOSS @ ${current_price:.2f}")
+
+                if self.notifier and self.notifier.enabled:
+                    self.notifier.notify_paper_trade_closed(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        action=trade['action'],
+                        quantity=trade['quantity'],
+                        entry_price=entry_price,
+                        exit_price=current_price,
+                        pnl_amount=result['pnl_amount'],
+                        pnl_percent=result['pnl_percent'],
+                        exit_reason="CLOSED_SL",
+                    )
+
+            # Check take profit (for BUY trades, price rises above TP)
+            elif take_profit and current_price >= take_profit:
+                result = self.db.close_paper_trade(trade_id, current_price, "CLOSED_TP")
+                closed_count += 1
+                logger.info(f"Paper trade #{trade_id} {symbol} hit TAKE PROFIT @ ${current_price:.2f}")
+
+                if self.notifier and self.notifier.enabled:
+                    self.notifier.notify_paper_trade_closed(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        action=trade['action'],
+                        quantity=trade['quantity'],
+                        entry_price=entry_price,
+                        exit_price=current_price,
+                        pnl_amount=result['pnl_amount'],
+                        pnl_percent=result['pnl_percent'],
+                        exit_reason="CLOSED_TP",
+                    )
+
+            self.connection.ib.sleep(0.5)  # Rate limiting
+
+        return closed_count
 
     def connect(self) -> bool:
         """Establish connection to IBKR."""
@@ -112,6 +193,12 @@ class TradingBot:
         logger.info(f"TRADING BOT RUN - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Mode: {'DRY RUN' if self.dry_run else 'LIVE TRADING'}")
         logger.info("=" * 50)
+
+        # Check existing paper trades first (in dry run mode)
+        if self.dry_run:
+            closed_count = self._check_paper_trades()
+            if closed_count > 0:
+                logger.info(f"Closed {closed_count} paper trades")
 
         # Run analysis
         opportunities = self.engine.run_analysis()
@@ -149,18 +236,58 @@ class TradingBot:
             if opp.take_profit_price:
                 logger.info(f"  Take Profit: ${opp.take_profit_price:.2f}")
 
-            # Send Telegram notification for opportunity
-            if self.notifier and self.notifier.enabled:
-                self.notifier.notify_trade_opportunity(
-                    symbol=opp.symbol,
-                    action=opp.decision.value,
-                    quantity=opp.position_size,
-                    price=opp.current_price,
-                    confidence=opp.signal.strength,
-                    stop_loss=opp.stop_loss_price,
-                    take_profit=opp.take_profit_price,
-                    reasons=opp.reasons,
-                )
+            # In dry run mode, save as paper trade for tracking
+            if self.dry_run:
+                # Only open paper trade if we don't already have one for this symbol
+                if not self.db.has_open_paper_trade(opp.symbol):
+                    trade_id = self.db.save_paper_trade(
+                        symbol=opp.symbol,
+                        action=opp.decision.value,
+                        quantity=opp.position_size,
+                        entry_price=opp.current_price,
+                        stop_loss=opp.stop_loss_price,
+                        take_profit=opp.take_profit_price,
+                        reasons=opp.reasons,
+                    )
+
+                    # Send paper trade opened notification
+                    if self.notifier and self.notifier.enabled:
+                        self.notifier.notify_paper_trade_opened(
+                            trade_id=trade_id,
+                            symbol=opp.symbol,
+                            action=opp.decision.value,
+                            quantity=opp.position_size,
+                            entry_price=opp.current_price,
+                            stop_loss=opp.stop_loss_price,
+                            take_profit=opp.take_profit_price,
+                        )
+                else:
+                    logger.info(f"  Skipping {opp.symbol} - already have open paper trade")
+                    # Still send opportunity notification
+                    if self.notifier and self.notifier.enabled:
+                        self.notifier.notify_trade_opportunity(
+                            symbol=opp.symbol,
+                            action=opp.decision.value,
+                            quantity=opp.position_size,
+                            price=opp.current_price,
+                            confidence=opp.signal.strength,
+                            stop_loss=opp.stop_loss_price,
+                            take_profit=opp.take_profit_price,
+                            reasons=opp.reasons,
+                        )
+            else:
+                # In live mode, just send opportunity notification
+                if self.notifier and self.notifier.enabled:
+                    self.notifier.notify_trade_opportunity(
+                        symbol=opp.symbol,
+                        action=opp.decision.value,
+                        quantity=opp.position_size,
+                        price=opp.current_price,
+                        confidence=opp.signal.strength,
+                        stop_loss=opp.stop_loss_price,
+                        take_profit=opp.take_profit_price,
+                        reasons=opp.reasons,
+                    )
 
         # Execute if not dry run
         if not self.dry_run and opportunities:
