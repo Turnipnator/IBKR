@@ -357,6 +357,95 @@ Bot is now monitoring the market.
 """
         return self.send_sync(message.strip())
 
+    def notify_daily_summary(
+        self,
+        date: str,
+        trades_opened: int,
+        trades_closed: int,
+        winning_trades: int,
+        losing_trades: int,
+        day_pnl: float,
+        total_pnl: float,
+        win_rate: float,
+        best_trade: Optional[dict] = None,
+        worst_trade: Optional[dict] = None,
+    ) -> bool:
+        """Send end-of-day trading summary."""
+        emoji = "\U0001F4C5"  # Calendar
+
+        day_pnl_emoji = "\U0001F7E2" if day_pnl >= 0 else "\U0001F534"
+        total_pnl_emoji = "\U0001F7E2" if total_pnl >= 0 else "\U0001F534"
+        day_sign = "+" if day_pnl >= 0 else ""
+        total_sign = "+" if total_pnl >= 0 else ""
+
+        # Performance indicator
+        if win_rate >= 60:
+            perf_emoji = "\U0001F525"  # Fire - great
+            perf_text = "Excellent!"
+        elif win_rate >= 50:
+            perf_emoji = "\U00002705"  # Check - good
+            perf_text = "Good"
+        elif win_rate >= 40:
+            perf_emoji = "\U0001F7E1"  # Yellow - okay
+            perf_text = "Needs improvement"
+        else:
+            perf_emoji = "\U0001F6A8"  # Alert - poor
+            perf_text = "Review strategy"
+
+        best_text = ""
+        if best_trade:
+            best_text = f"\n<b>Best:</b> {best_trade['symbol']} +${best_trade['pnl']:.2f}"
+
+        worst_text = ""
+        if worst_trade:
+            worst_text = f"\n<b>Worst:</b> {worst_trade['symbol']} -${abs(worst_trade['pnl']):.2f}"
+
+        message = f"""
+{emoji} <b>Daily Summary - {date}</b>
+
+<b>Today's Activity:</b>
+  Opened: {trades_opened} trades
+  Closed: {trades_closed} trades
+  Won: {winning_trades} | Lost: {losing_trades}
+
+{day_pnl_emoji} <b>Today's P&L:</b> {day_sign}${day_pnl:,.2f}
+{total_pnl_emoji} <b>Total P&L:</b> {total_sign}${total_pnl:,.2f}
+
+<b>Win Rate:</b> {win_rate:.1f}% {perf_emoji} {perf_text}
+{best_text}{worst_text}
+
+<i>Strategy: Scalping (TP 1.5% / SL 0.75%)</i>
+"""
+        return self.send_sync(message.strip())
+
+    def notify_running_pnl(
+        self,
+        open_trades: int,
+        unrealized_pnl: float,
+        realized_pnl: float,
+        total_pnl: float,
+    ) -> bool:
+        """Send running P&L update (can be called periodically)."""
+        emoji = "\U0001F4B5"  # Dollar
+
+        total_emoji = "\U0001F7E2" if total_pnl >= 0 else "\U0001F534"
+        total_sign = "+" if total_pnl >= 0 else ""
+        realized_sign = "+" if realized_pnl >= 0 else ""
+        unrealized_sign = "+" if unrealized_pnl >= 0 else ""
+
+        message = f"""
+{emoji} <b>P&L Update</b>
+
+<b>Open Trades:</b> {open_trades}
+<b>Unrealized:</b> {unrealized_sign}${unrealized_pnl:,.2f}
+<b>Realized:</b> {realized_sign}${realized_pnl:,.2f}
+
+{total_emoji} <b>Total:</b> {total_sign}${total_pnl:,.2f}
+
+<code>{datetime.now().strftime('%H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
 
 # Singleton notifier instance
 _notifier: Optional[TelegramNotifier] = None

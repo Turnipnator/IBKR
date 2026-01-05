@@ -70,6 +70,9 @@ class TradingBot:
         # Telegram notifications
         self.notifier = get_notifier() if enable_telegram else None
 
+        # Track daily summary sent status
+        self._last_summary_date: Optional[str] = None
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -167,6 +170,36 @@ class TradingBot:
             self.connection.ib.sleep(0.5)  # Rate limiting
 
         return closed_count
+
+    def _send_daily_summary(self):
+        """Send daily summary at market close if not already sent."""
+        today = datetime.now(self.US_EASTERN).strftime('%Y-%m-%d')
+
+        # Only send once per day
+        if self._last_summary_date == today:
+            return
+
+        # Get stats from database
+        stats = self.db.get_paper_trade_stats()
+
+        if stats['total_trades'] == 0:
+            return  # No trades to report
+
+        # Calculate today's stats (would need to enhance DB for this)
+        # For now, send overall stats
+        if self.notifier and self.notifier.enabled:
+            self.notifier.notify_daily_summary(
+                date=today,
+                trades_opened=stats['open_trades'],
+                trades_closed=stats['closed_trades'],
+                winning_trades=stats['winning_trades'],
+                losing_trades=stats['losing_trades'],
+                day_pnl=stats['total_pnl'],  # Would be day-specific ideally
+                total_pnl=stats['total_pnl'],
+                win_rate=stats['win_rate'],
+            )
+            self._last_summary_date = today
+            logger.info("Daily summary sent")
 
     def connect(self) -> bool:
         """Establish connection to IBKR."""
@@ -345,7 +378,13 @@ class TradingBot:
 
         try:
             while self.running:
-                # Check market hours (optional - can trade outside hours for some)
+                now_et = datetime.now(self.US_EASTERN)
+
+                # Check if near market close (3:55 PM ET) - send daily summary
+                if now_et.hour == 15 and now_et.minute >= 55:
+                    self._send_daily_summary()
+
+                # Check market hours
                 if not self._is_market_hours():
                     logger.info("Outside market hours, waiting...")
                     time.sleep(60)  # Check every minute

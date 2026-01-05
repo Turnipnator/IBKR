@@ -52,7 +52,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-    command: ["python", "-m", "src.bot", "--interval", "60"]
+    command: ["python", "-m", "src.bot", "--interval", "5"]
 
 volumes:
   ib-gateway-data:

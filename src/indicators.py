@@ -186,6 +186,7 @@ def stochastic(
 class TechnicalAnalyzer:
     """
     Calculates technical indicators and generates signals for a DataFrame.
+    Optimized for SCALPING with fast EMA crossovers and short RSI periods.
 
     Usage:
         analyzer = TechnicalAnalyzer(df)
@@ -196,22 +197,24 @@ class TechnicalAnalyzer:
     def __init__(
         self,
         df: pd.DataFrame,
-        sma_fast: int = 50,
-        sma_slow: int = 200,
-        rsi_period: int = 14,
+        sma_fast: int = 9,      # Fast EMA for scalping (was 50)
+        sma_slow: int = 21,     # Slow EMA for scalping (was 200)
+        rsi_period: int = 7,    # Shorter RSI for scalping (was 14)
         rsi_overbought: int = 70,
         rsi_oversold: int = 30,
+        use_ema: bool = True,   # Use EMA instead of SMA for scalping
     ):
         """
         Initialize with OHLCV DataFrame.
 
         Args:
             df: DataFrame with columns: date, open, high, low, close, volume
-            sma_fast: Fast SMA period
-            sma_slow: Slow SMA period
-            rsi_period: RSI period
+            sma_fast: Fast MA period (9 for scalping)
+            sma_slow: Slow MA period (21 for scalping)
+            rsi_period: RSI period (7 for scalping)
             rsi_overbought: RSI overbought threshold
             rsi_oversold: RSI oversold threshold
+            use_ema: Use EMA instead of SMA (True for scalping)
         """
         self.df = df.copy()
         self.sma_fast = sma_fast
@@ -219,43 +222,56 @@ class TechnicalAnalyzer:
         self.rsi_period = rsi_period
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
+        self.use_ema = use_ema
 
     def calculate_all(self) -> pd.DataFrame:
-        """Calculate all technical indicators."""
+        """Calculate all technical indicators optimized for scalping."""
 
-        # Moving averages
-        self.df[f'sma_{self.sma_fast}'] = sma(self.df['close'], self.sma_fast)
-        self.df[f'sma_{self.sma_slow}'] = sma(self.df['close'], self.sma_slow)
+        # Moving averages - use EMA for scalping (faster response)
+        if self.use_ema:
+            self.df[f'ema_{self.sma_fast}'] = ema(self.df['close'], self.sma_fast)
+            self.df[f'ema_{self.sma_slow}'] = ema(self.df['close'], self.sma_slow)
+            # Alias for compatibility
+            self.df[f'sma_{self.sma_fast}'] = self.df[f'ema_{self.sma_fast}']
+            self.df[f'sma_{self.sma_slow}'] = self.df[f'ema_{self.sma_slow}']
+        else:
+            self.df[f'sma_{self.sma_fast}'] = sma(self.df['close'], self.sma_fast)
+            self.df[f'sma_{self.sma_slow}'] = sma(self.df['close'], self.sma_slow)
+
+        # Standard EMAs for MACD
         self.df['ema_12'] = ema(self.df['close'], 12)
         self.df['ema_26'] = ema(self.df['close'], 26)
 
-        # RSI
+        # RSI with shorter period for scalping
         self.df['rsi'] = rsi(self.df['close'], self.rsi_period)
 
-        # MACD
-        macd_line, signal_line, hist = macd(self.df['close'])
+        # MACD - use faster settings for scalping (8, 17, 9)
+        macd_line, signal_line, hist = macd(self.df['close'], fast_period=8, slow_period=17, signal_period=9)
         self.df['macd'] = macd_line
         self.df['macd_signal'] = signal_line
         self.df['macd_hist'] = hist
 
-        # Bollinger Bands
-        upper, middle, lower = bollinger_bands(self.df['close'])
+        # Bollinger Bands - shorter period for scalping
+        upper, middle, lower = bollinger_bands(self.df['close'], period=10, std_dev=2.0)
         self.df['bb_upper'] = upper
         self.df['bb_middle'] = middle
         self.df['bb_lower'] = lower
 
-        # ATR (if we have high/low)
+        # ATR (if we have high/low) - shorter period for scalping
         if 'high' in self.df.columns and 'low' in self.df.columns:
-            self.df['atr'] = atr(self.df['high'], self.df['low'], self.df['close'])
+            self.df['atr'] = atr(self.df['high'], self.df['low'], self.df['close'], period=7)
 
-            # Stochastic
-            k, d = stochastic(self.df['high'], self.df['low'], self.df['close'])
+            # Stochastic - faster settings for scalping
+            k, d = stochastic(self.df['high'], self.df['low'], self.df['close'], k_period=5, d_period=3)
             self.df['stoch_k'] = k
             self.df['stoch_d'] = d
 
-        # Trend signals
+        # Trend signals using EMA
+        fast_col = f'ema_{self.sma_fast}' if self.use_ema else f'sma_{self.sma_fast}'
+        slow_col = f'ema_{self.sma_slow}' if self.use_ema else f'sma_{self.sma_slow}'
+
         self.df['trend'] = np.where(
-            self.df[f'sma_{self.sma_fast}'] > self.df[f'sma_{self.sma_slow}'],
+            self.df[fast_col] > self.df[slow_col],
             'BULLISH',
             'BEARISH'
         )
@@ -268,6 +284,19 @@ class TechnicalAnalyzer:
             np.where(
                 (self.df['macd'] < self.df['macd_signal']) &
                 (self.df['macd'].shift(1) >= self.df['macd_signal'].shift(1)),
+                'BEARISH',
+                'NEUTRAL'
+            )
+        )
+
+        # EMA crossover signal (important for scalping)
+        self.df['ema_cross'] = np.where(
+            (self.df[fast_col] > self.df[slow_col]) &
+            (self.df[fast_col].shift(1) <= self.df[slow_col].shift(1)),
+            'BULLISH',
+            np.where(
+                (self.df[fast_col] < self.df[slow_col]) &
+                (self.df[fast_col].shift(1) >= self.df[slow_col].shift(1)),
                 'BEARISH',
                 'NEUTRAL'
             )

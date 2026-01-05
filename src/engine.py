@@ -171,16 +171,20 @@ class DecisionEngine:
     def analyze_symbol(self, symbol: str) -> Optional[TradeOpportunity]:
         """
         Analyze a single symbol and generate trade opportunity if any.
+        Uses 5-minute bars for scalping strategy.
 
         Returns:
             TradeOpportunity or None if no action recommended
         """
         try:
-            # Fetch data (1 year for proper indicator calculation)
+            # Fetch data using config settings (5-min bars for scalping)
+            bar_size = getattr(self.config, 'bar_size', '5 mins')
+            duration = getattr(self.config, 'data_duration', '2 D')
+
             df = self.fetcher.get_historical_data(
                 symbol,
-                duration="1 Y",
-                bar_size="1 day"
+                duration=duration,
+                bar_size=bar_size
             )
 
             if df is None or df.empty:
@@ -190,14 +194,18 @@ class DecisionEngine:
             # Save to database
             self.db.save_ohlcv(df, symbol)
 
-            # Calculate indicators
+            # Calculate indicators with scalping settings (EMA 9/21, RSI 7)
+            ema_fast = getattr(self.config, 'ema_fast', self.config.sma_fast)
+            ema_slow = getattr(self.config, 'ema_slow', self.config.sma_slow)
+
             analyzer = TechnicalAnalyzer(
                 df,
-                sma_fast=self.config.sma_fast,
-                sma_slow=self.config.sma_slow,
+                sma_fast=ema_fast,
+                sma_slow=ema_slow,
                 rsi_period=self.config.rsi_period,
                 rsi_overbought=self.config.rsi_overbought,
                 rsi_oversold=self.config.rsi_oversold,
+                use_ema=True,  # Use EMA for scalping
             )
             analyzer.calculate_all()
 

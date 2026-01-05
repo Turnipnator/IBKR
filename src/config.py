@@ -39,26 +39,35 @@ class IBKRConfig:
 
 @dataclass
 class TradingConfig:
-    """Trading parameters."""
-    # Asset universe
+    """Trading parameters - configured for SCALPING strategy."""
+    # Asset universe - focus on liquid, volatile stocks
     symbols: dict = field(default_factory=lambda: {
-        "precious_metals": ["GLD", "SLV", "NEM", "AEM"],
+        "precious_metals": ["GLD", "SLV"],
         "ai": ["NVDA", "AMD", "GOOGL", "MSFT"],
         "tech": ["AAPL", "TSLA", "META", "AMZN"],
     })
 
-    # Risk management
+    # Risk management - SCALPING settings (tight stops, quick profits)
     max_position_pct: float = 0.10  # Max 10% of portfolio per position
-    stop_loss_pct: float = 0.10     # 10% trailing stop
-    take_profit_pct: float = 0.25   # 25% take profit
+    stop_loss_pct: float = 0.0075   # 0.75% stop loss (tight for scalping)
+    take_profit_pct: float = 0.015  # 1.5% take profit (2:1 reward:risk)
     max_sector_pct: float = 0.40    # Max 40% in any sector
 
-    # Technical parameters
-    sma_fast: int = 50
-    sma_slow: int = 200
-    rsi_period: int = 14
+    # Technical parameters - FAST indicators for scalping
+    ema_fast: int = 9              # Fast EMA (replaces SMA 50)
+    ema_slow: int = 21             # Slow EMA (replaces SMA 200)
+    rsi_period: int = 7            # Shorter RSI for faster signals
     rsi_overbought: int = 70
     rsi_oversold: int = 30
+
+    # Scalping-specific settings
+    bar_size: str = "5 mins"       # 5-minute candles for scalping
+    data_duration: str = "2 D"     # 2 days of data (enough for 5-min bars)
+    min_volume: int = 100000       # Minimum volume filter
+
+    # Legacy support (kept for compatibility)
+    sma_fast: int = 9
+    sma_slow: int = 21
 
 
 @dataclass
