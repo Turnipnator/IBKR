@@ -39,7 +39,16 @@ class IBKRConfig:
 
 @dataclass
 class TradingConfig:
-    """Trading parameters - configured for SCALPING strategy."""
+    """Trading parameters - configured for MOMENTUM SCALPING strategy.
+
+    Based on winning strategy from Binance Bot (13/13 wins):
+    - Wider stop loss to avoid noise (3% vs 0.75%)
+    - Quick take profit (1.5%)
+    - High quality entries only (60%+ signal strength)
+    - BULLISH trend requirement
+    - Volume confirmation (1.5x average)
+    - Cooldown after losses (20 min)
+    """
     # Asset universe - focus on liquid, volatile stocks
     symbols: dict = field(default_factory=lambda: {
         "precious_metals": ["GLD", "SLV"],
@@ -47,18 +56,29 @@ class TradingConfig:
         "tech": ["AAPL", "TSLA", "META", "AMZN"],
     })
 
-    # Risk management - SCALPING settings (tight stops, quick profits)
+    # Risk management - MOMENTUM settings (wider stops, quick profits)
     max_position_pct: float = 0.10  # Max 10% of portfolio per position
-    stop_loss_pct: float = 0.0075   # 0.75% stop loss (tight for scalping)
-    take_profit_pct: float = 0.015  # 1.5% take profit (2:1 reward:risk)
+    stop_loss_pct: float = 0.03     # 3% stop loss (wider to avoid noise!)
+    take_profit_pct: float = 0.015  # 1.5% take profit (lock in gains quickly)
     max_sector_pct: float = 0.40    # Max 40% in any sector
 
-    # Technical parameters - FAST indicators for scalping
-    ema_fast: int = 9              # Fast EMA (replaces SMA 50)
-    ema_slow: int = 21             # Slow EMA (replaces SMA 200)
+    # Technical parameters - EMA-based for momentum
+    ema_fast: int = 9              # Fast EMA
+    ema_slow: int = 21             # Slow EMA
+    ema_trend: int = 50            # Trend EMA (for direction filter)
     rsi_period: int = 7            # Shorter RSI for faster signals
     rsi_overbought: int = 70
     rsi_oversold: int = 30
+
+    # Entry filters (from Binance winning strategy)
+    min_signal_strength: float = 0.60   # Only enter on 60%+ signals (was 50%)
+    volume_multiplier: float = 1.5      # Require 1.5x average volume
+    require_bullish_trend: bool = True  # Only trade BULLISH trends
+
+    # Anti-churning protections
+    cooldown_minutes: int = 20          # Cooldown after stop loss hit
+    max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
+    max_daily_loss: float = 5000.0      # Stop trading if daily loss exceeds this
 
     # Scalping-specific settings
     bar_size: str = "5 mins"       # 5-minute candles for scalping

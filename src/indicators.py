@@ -186,23 +186,33 @@ def stochastic(
 class TechnicalAnalyzer:
     """
     Calculates technical indicators and generates signals for a DataFrame.
-    Optimized for SCALPING with fast EMA crossovers and short RSI periods.
+    Optimized for MOMENTUM SCALPING strategy based on Binance bot learnings.
+
+    Key features:
+    - EMA-based trend detection (9/21/50)
+    - Volume confirmation (1.5x average)
+    - BULLISH trend requirement
+    - High quality signal filtering (60%+ strength)
 
     Usage:
         analyzer = TechnicalAnalyzer(df)
         analyzer.calculate_all()
         signal = analyzer.generate_signal("AAPL")
+        trend = analyzer.detect_trend()
+        has_volume = analyzer.check_volume_confirmation(1.5)
     """
 
     def __init__(
         self,
         df: pd.DataFrame,
-        sma_fast: int = 9,      # Fast EMA for scalping (was 50)
-        sma_slow: int = 21,     # Slow EMA for scalping (was 200)
-        rsi_period: int = 7,    # Shorter RSI for scalping (was 14)
+        sma_fast: int = 9,      # Fast EMA for scalping
+        sma_slow: int = 21,     # Slow EMA for scalping
+        ema_trend: int = 50,    # Trend EMA for direction filter
+        rsi_period: int = 7,    # Shorter RSI for scalping
         rsi_overbought: int = 70,
         rsi_oversold: int = 30,
-        use_ema: bool = True,   # Use EMA instead of SMA for scalping
+        use_ema: bool = True,   # Use EMA instead of SMA
+        volume_period: int = 20, # Period for volume average
     ):
         """
         Initialize with OHLCV DataFrame.
@@ -211,36 +221,47 @@ class TechnicalAnalyzer:
             df: DataFrame with columns: date, open, high, low, close, volume
             sma_fast: Fast MA period (9 for scalping)
             sma_slow: Slow MA period (21 for scalping)
+            ema_trend: Trend EMA period (50 for direction)
             rsi_period: RSI period (7 for scalping)
             rsi_overbought: RSI overbought threshold
             rsi_oversold: RSI oversold threshold
             use_ema: Use EMA instead of SMA (True for scalping)
+            volume_period: Period for calculating average volume
         """
         self.df = df.copy()
         self.sma_fast = sma_fast
         self.sma_slow = sma_slow
+        self.ema_trend = ema_trend
         self.rsi_period = rsi_period
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
         self.use_ema = use_ema
+        self.volume_period = volume_period
 
     def calculate_all(self) -> pd.DataFrame:
-        """Calculate all technical indicators optimized for scalping."""
+        """Calculate all technical indicators optimized for momentum scalping."""
 
         # Moving averages - use EMA for scalping (faster response)
         if self.use_ema:
             self.df[f'ema_{self.sma_fast}'] = ema(self.df['close'], self.sma_fast)
             self.df[f'ema_{self.sma_slow}'] = ema(self.df['close'], self.sma_slow)
+            self.df[f'ema_{self.ema_trend}'] = ema(self.df['close'], self.ema_trend)
             # Alias for compatibility
             self.df[f'sma_{self.sma_fast}'] = self.df[f'ema_{self.sma_fast}']
             self.df[f'sma_{self.sma_slow}'] = self.df[f'ema_{self.sma_slow}']
         else:
             self.df[f'sma_{self.sma_fast}'] = sma(self.df['close'], self.sma_fast)
             self.df[f'sma_{self.sma_slow}'] = sma(self.df['close'], self.sma_slow)
+            self.df[f'ema_{self.ema_trend}'] = ema(self.df['close'], self.ema_trend)
 
         # Standard EMAs for MACD
         self.df['ema_12'] = ema(self.df['close'], 12)
         self.df['ema_26'] = ema(self.df['close'], 26)
+
+        # Volume analysis - average volume for confirmation
+        if 'volume' in self.df.columns:
+            self.df['volume_avg'] = self.df['volume'].rolling(window=self.volume_period).mean()
+            self.df['volume_ratio'] = self.df['volume'] / self.df['volume_avg']
 
         # RSI with shorter period for scalping
         self.df['rsi'] = rsi(self.df['close'], self.rsi_period)
@@ -443,3 +464,158 @@ class TechnicalAnalyzer:
             reasons=reasons,
             indicators=indicators
         )
+
+    def detect_trend(self) -> str:
+        """
+        Detect the current market trend using EMA alignment.
+
+        Based on Binance winning strategy:
+        - BULLISH: EMA9 > EMA21 > EMA50 AND price > EMA50
+        - BEARISH: EMA9 < EMA21 < EMA50 AND price < EMA50
+        - SIDEWAYS: Mixed alignment (choppy, ranging)
+
+        Returns:
+            'BULLISH', 'BEARISH', or 'SIDEWAYS'
+        """
+        if self.df.empty:
+            return 'SIDEWAYS'
+
+        latest = self.df.iloc[-1]
+        close = latest.get('close')
+
+        # Get EMAs
+        ema_fast = latest.get(f'ema_{self.sma_fast}')
+        ema_slow = latest.get(f'ema_{self.sma_slow}')
+        ema_trend = latest.get(f'ema_{self.ema_trend}')
+
+        # Check for valid values
+        if any(v is None or (isinstance(v, float) and np.isnan(v))
+               for v in [close, ema_fast, ema_slow, ema_trend]):
+            return 'SIDEWAYS'
+
+        # BULLISH: All EMAs stacked bullishly AND price above trend EMA
+        if ema_fast > ema_slow > ema_trend and close > ema_trend:
+            return 'BULLISH'
+
+        # BEARISH: All EMAs stacked bearishly AND price below trend EMA
+        if ema_fast < ema_slow < ema_trend and close < ema_trend:
+            return 'BEARISH'
+
+        # Everything else is SIDEWAYS (mixed/choppy)
+        return 'SIDEWAYS'
+
+    def check_volume_confirmation(self, multiplier: float = 1.5) -> tuple[bool, float]:
+        """
+        Check if current volume confirms the move.
+
+        Based on Binance winning strategy:
+        - Volume must be at least 1.5x average to confirm institutional participation
+        - High volume = trend confirmation, low volume = likely fake breakout
+
+        Args:
+            multiplier: Required volume multiplier (default 1.5x)
+
+        Returns:
+            Tuple of (is_confirmed, current_volume_ratio)
+        """
+        if self.df.empty or 'volume_ratio' not in self.df.columns:
+            return (False, 0.0)
+
+        volume_ratio = self.df['volume_ratio'].iloc[-1]
+
+        if volume_ratio is None or np.isnan(volume_ratio):
+            return (False, 0.0)
+
+        return (volume_ratio >= multiplier, float(volume_ratio))
+
+    def get_momentum_score(self) -> float:
+        """
+        Calculate a composite momentum score (0.0 to 1.0).
+
+        Based on Binance winning strategy components:
+        - RSI position relative to zones
+        - MACD alignment (line above signal, histogram positive)
+        - EMA alignment
+        - Price position in Bollinger Bands
+
+        Returns:
+            Momentum score from 0.0 (very bearish) to 1.0 (very bullish)
+        """
+        if self.df.empty:
+            return 0.5
+
+        latest = self.df.iloc[-1]
+        score_components = []
+
+        # 1. RSI component (0.0 to 1.0)
+        rsi_val = latest.get('rsi')
+        if rsi_val is not None and not np.isnan(rsi_val):
+            # 0 = oversold (bullish), 100 = overbought (bearish)
+            # But for momentum, we want mid-range slightly favoring upward momentum
+            if rsi_val < 30:
+                rsi_score = 0.8  # Oversold = potential bounce
+            elif rsi_val < 50:
+                rsi_score = 0.6  # Below mid = room to run
+            elif rsi_val < 70:
+                rsi_score = 0.7  # Above mid but not overbought = strong momentum
+            else:
+                rsi_score = 0.3  # Overbought = caution
+            score_components.append(rsi_score)
+
+        # 2. MACD component
+        macd_val = latest.get('macd')
+        macd_signal = latest.get('macd_signal')
+        macd_hist = latest.get('macd_hist')
+
+        if all(v is not None and not np.isnan(v) for v in [macd_val, macd_signal, macd_hist]):
+            if macd_val > macd_signal and macd_hist > 0:
+                macd_score = 0.9  # Strong bullish
+            elif macd_val > macd_signal:
+                macd_score = 0.7  # Bullish crossover
+            elif macd_val < macd_signal and macd_hist < 0:
+                macd_score = 0.2  # Strong bearish
+            else:
+                macd_score = 0.4  # Bearish but not confirmed
+            score_components.append(macd_score)
+
+        # 3. EMA alignment component
+        ema_fast = latest.get(f'ema_{self.sma_fast}')
+        ema_slow = latest.get(f'ema_{self.sma_slow}')
+        ema_trend = latest.get(f'ema_{self.ema_trend}')
+        close = latest.get('close')
+
+        if all(v is not None and not np.isnan(v) for v in [ema_fast, ema_slow, close]):
+            if ema_fast > ema_slow and close > ema_fast:
+                ema_score = 0.9  # Strong uptrend
+            elif ema_fast > ema_slow:
+                ema_score = 0.7  # Uptrend
+            elif ema_fast < ema_slow and close < ema_fast:
+                ema_score = 0.2  # Strong downtrend
+            else:
+                ema_score = 0.4  # Downtrend
+            score_components.append(ema_score)
+
+        # 4. Bollinger Band position
+        bb_upper = latest.get('bb_upper')
+        bb_lower = latest.get('bb_lower')
+        bb_middle = latest.get('bb_middle')
+
+        if all(v is not None and not np.isnan(v) for v in [bb_upper, bb_lower, bb_middle, close]):
+            bb_range = bb_upper - bb_lower
+            if bb_range > 0:
+                bb_position = (close - bb_lower) / bb_range  # 0 = at lower, 1 = at upper
+
+                if bb_position < 0.2:
+                    bb_score = 0.8  # Near lower band = potential bounce
+                elif bb_position < 0.5:
+                    bb_score = 0.6  # Lower half = room to run
+                elif bb_position < 0.8:
+                    bb_score = 0.5  # Upper half = moderate
+                else:
+                    bb_score = 0.3  # Near upper band = caution
+                score_components.append(bb_score)
+
+        # Calculate average score
+        if score_components:
+            return sum(score_components) / len(score_components)
+        return 0.5

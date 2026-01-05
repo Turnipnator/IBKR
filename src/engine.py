@@ -127,14 +127,38 @@ class DecisionEngine:
         """
         Check if a trade opportunity passes risk management rules.
 
+        Based on Binance winning strategy filters:
+        - Signal strength >= 60%
+        - No cooldown active
+        - Under max trades per symbol per day
+        - Under daily loss limit
+
         Returns:
             Tuple of (passes, list of failure reasons)
         """
         failures = []
 
-        # Check 1: Signal strength threshold
-        if opportunity.signal.strength < 0.5:
-            failures.append(f"Signal strength too low ({opportunity.signal.strength:.0%})")
+        # Check 1: Signal strength threshold (use config value, default 60%)
+        min_strength = getattr(self.config, 'min_signal_strength', 0.60)
+        if opportunity.signal.strength < min_strength:
+            failures.append(f"Signal strength too low ({opportunity.signal.strength:.0%} < {min_strength:.0%})")
+
+        # Check 2: Cooldown check (anti-churning)
+        in_cooldown, cooldown_reason = self.db.is_symbol_in_cooldown(opportunity.symbol)
+        if in_cooldown:
+            failures.append(f"Symbol in cooldown: {cooldown_reason}")
+
+        # Check 3: Max trades per symbol per day
+        max_trades = getattr(self.config, 'max_trades_per_symbol_day', 3)
+        daily_count = self.db.get_daily_trade_count(opportunity.symbol)
+        if daily_count >= max_trades:
+            failures.append(f"Max daily trades reached for {opportunity.symbol} ({daily_count}/{max_trades})")
+
+        # Check 4: Daily loss limit
+        max_daily_loss = getattr(self.config, 'max_daily_loss', 5000.0)
+        daily_pnl = self.db.get_daily_pnl()
+        if daily_pnl < -max_daily_loss:
+            failures.append(f"Daily loss limit exceeded (${daily_pnl:.2f} < -${max_daily_loss:.2f})")
 
         # Check 2: Position size > 0
         if opportunity.position_size <= 0:
@@ -194,14 +218,16 @@ class DecisionEngine:
             # Save to database
             self.db.save_ohlcv(df, symbol)
 
-            # Calculate indicators with scalping settings (EMA 9/21, RSI 7)
+            # Calculate indicators with momentum scalping settings
             ema_fast = getattr(self.config, 'ema_fast', self.config.sma_fast)
             ema_slow = getattr(self.config, 'ema_slow', self.config.sma_slow)
+            ema_trend = getattr(self.config, 'ema_trend', 50)
 
             analyzer = TechnicalAnalyzer(
                 df,
                 sma_fast=ema_fast,
                 sma_slow=ema_slow,
+                ema_trend=ema_trend,
                 rsi_period=self.config.rsi_period,
                 rsi_overbought=self.config.rsi_overbought,
                 rsi_oversold=self.config.rsi_oversold,
@@ -209,8 +235,29 @@ class DecisionEngine:
             )
             analyzer.calculate_all()
 
+            # Check BULLISH trend filter (from Binance winning strategy)
+            require_bullish = getattr(self.config, 'require_bullish_trend', True)
+            if require_bullish:
+                trend = analyzer.detect_trend()
+                if trend != 'BULLISH':
+                    logger.debug(f"  {symbol}: Skipped - trend is {trend} (not BULLISH)")
+                    return None
+
+            # Check volume confirmation (from Binance winning strategy)
+            volume_mult = getattr(self.config, 'volume_multiplier', 1.5)
+            vol_confirmed, vol_ratio = analyzer.check_volume_confirmation(volume_mult)
+            if not vol_confirmed:
+                logger.debug(f"  {symbol}: Skipped - volume too low ({vol_ratio:.1f}x < {volume_mult}x)")
+                return None
+
             # Generate signal
             signal = analyzer.generate_signal(symbol)
+
+            # Use momentum score if available
+            momentum_score = analyzer.get_momentum_score()
+            if momentum_score < 0.5:
+                logger.debug(f"  {symbol}: Skipped - momentum score too low ({momentum_score:.0%})")
+                return None
 
             # Get current price
             current_price = float(df['close'].iloc[-1])

@@ -135,6 +135,11 @@ class TradingBot:
                 closed_count += 1
                 logger.info(f"Paper trade #{trade_id} {symbol} hit STOP LOSS @ ${current_price:.2f}")
 
+                # SET COOLDOWN after stop loss (anti-churning from Binance strategy)
+                cooldown_mins = getattr(self.engine.config, 'cooldown_minutes', 20)
+                self.db.set_symbol_cooldown(symbol, cooldown_mins, "stop_loss")
+                logger.info(f"  {symbol} in cooldown for {cooldown_mins} minutes")
+
                 if self.notifier and self.notifier.enabled:
                     self.notifier.notify_paper_trade_closed(
                         trade_id=trade_id,
@@ -282,6 +287,9 @@ class TradingBot:
                         take_profit=opp.take_profit_price,
                         reasons=opp.reasons,
                     )
+
+                    # Increment daily trade count for this symbol (anti-churning)
+                    self.db.increment_daily_trade_count(opp.symbol)
 
                     # Send paper trade opened notification
                     if self.notifier and self.notifier.enabled:

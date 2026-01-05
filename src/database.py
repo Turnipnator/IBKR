@@ -4,7 +4,7 @@ SQLite database layer for storing market data and trade history.
 
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 import pandas as pd
@@ -106,6 +106,24 @@ class Database:
                 -- Index for faster queries on open paper trades
                 CREATE INDEX IF NOT EXISTS idx_paper_trades_status
                 ON paper_trades(status);
+
+                -- Symbol cooldowns (anti-churning)
+                CREATE TABLE IF NOT EXISTS symbol_cooldowns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE,
+                    cooldown_until TEXT NOT NULL,
+                    reason TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- Daily trade counts per symbol
+                CREATE TABLE IF NOT EXISTS daily_trade_counts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    trade_count INTEGER DEFAULT 1,
+                    UNIQUE(symbol, trade_date)
+                );
             """)
             conn.commit()
             logger.info(f"Database initialized at {self.db_path}")
@@ -470,5 +488,162 @@ class Database:
                 (symbol,)
             )
             return cursor.fetchone()[0] > 0
+        finally:
+            conn.close()
+
+    # ==================== Cooldown & Anti-Churning Methods ====================
+
+    def set_symbol_cooldown(self, symbol: str, minutes: int, reason: str = "stop_loss"):
+        """
+        Set a cooldown period for a symbol after a losing trade.
+
+        Args:
+            symbol: Stock ticker
+            minutes: Cooldown duration in minutes
+            reason: Why cooldown was set (stop_loss, manual, etc.)
+        """
+        from datetime import timedelta
+        cooldown_until = datetime.now() + timedelta(minutes=minutes)
+
+        conn = self._get_connection()
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO symbol_cooldowns (symbol, cooldown_until, reason)
+                VALUES (?, ?, ?)
+            """, (symbol, cooldown_until.isoformat(), reason))
+            conn.commit()
+            logger.info(f"Set {minutes}min cooldown for {symbol} until {cooldown_until.strftime('%H:%M:%S')} (reason: {reason})")
+        finally:
+            conn.close()
+
+    def is_symbol_in_cooldown(self, symbol: str) -> tuple[bool, Optional[str]]:
+        """
+        Check if a symbol is currently in cooldown.
+
+        Returns:
+            Tuple of (is_in_cooldown, reason_or_time_remaining)
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT cooldown_until, reason FROM symbol_cooldowns WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                return (False, None)
+
+            cooldown_until = datetime.fromisoformat(row['cooldown_until'])
+            now = datetime.now()
+
+            if now < cooldown_until:
+                remaining = cooldown_until - now
+                mins = int(remaining.total_seconds() / 60)
+                secs = int(remaining.total_seconds() % 60)
+                return (True, f"{mins}m {secs}s remaining (reason: {row['reason']})")
+            else:
+                # Cooldown expired, clean it up
+                conn.execute("DELETE FROM symbol_cooldowns WHERE symbol = ?", (symbol,))
+                conn.commit()
+                return (False, None)
+        finally:
+            conn.close()
+
+    def clear_symbol_cooldown(self, symbol: str):
+        """Clear cooldown for a symbol."""
+        conn = self._get_connection()
+        try:
+            conn.execute("DELETE FROM symbol_cooldowns WHERE symbol = ?", (symbol,))
+            conn.commit()
+            logger.info(f"Cleared cooldown for {symbol}")
+        finally:
+            conn.close()
+
+    def clear_all_cooldowns(self):
+        """Clear all cooldowns (useful for daily reset)."""
+        conn = self._get_connection()
+        try:
+            conn.execute("DELETE FROM symbol_cooldowns")
+            conn.commit()
+            logger.info("Cleared all symbol cooldowns")
+        finally:
+            conn.close()
+
+    def increment_daily_trade_count(self, symbol: str) -> int:
+        """
+        Increment the daily trade count for a symbol.
+
+        Returns:
+            The new count for today
+        """
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            # Try to update existing count
+            cursor = conn.execute("""
+                UPDATE daily_trade_counts
+                SET trade_count = trade_count + 1
+                WHERE symbol = ? AND trade_date = ?
+            """, (symbol, today))
+
+            if cursor.rowcount == 0:
+                # No existing record, insert new one
+                conn.execute("""
+                    INSERT INTO daily_trade_counts (symbol, trade_date, trade_count)
+                    VALUES (?, ?, 1)
+                """, (symbol, today))
+
+            conn.commit()
+
+            # Get the current count
+            cursor = conn.execute(
+                "SELECT trade_count FROM daily_trade_counts WHERE symbol = ? AND trade_date = ?",
+                (symbol, today)
+            )
+            row = cursor.fetchone()
+            count = row[0] if row else 1
+            logger.debug(f"{symbol} daily trade count: {count}")
+            return count
+        finally:
+            conn.close()
+
+    def get_daily_trade_count(self, symbol: str) -> int:
+        """Get the number of trades for a symbol today."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT trade_count FROM daily_trade_counts WHERE symbol = ? AND trade_date = ?",
+                (symbol, today)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 0
+        finally:
+            conn.close()
+
+    def get_daily_pnl(self) -> float:
+        """Get total P&L for trades closed today."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("""
+                SELECT COALESCE(SUM(pnl_amount), 0)
+                FROM paper_trades
+                WHERE status != 'OPEN'
+                AND date(exit_time) = ?
+            """, (today,))
+            return cursor.fetchone()[0] or 0.0
+        finally:
+            conn.close()
+
+    def reset_daily_counts(self):
+        """Reset daily trade counts (call at midnight)."""
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            conn.execute("DELETE FROM daily_trade_counts WHERE trade_date < ?", (yesterday,))
+            conn.commit()
+            logger.info("Reset daily trade counts")
         finally:
             conn.close()
