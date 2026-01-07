@@ -240,14 +240,14 @@ class DecisionEngine:
             if require_bullish:
                 trend = analyzer.detect_trend()
                 if trend != 'BULLISH':
-                    logger.debug(f"  {symbol}: Skipped - trend is {trend} (not BULLISH)")
+                    logger.info(f"  {symbol}: Skipped - trend is {trend} (need BULLISH)")
                     return None
 
             # Check volume confirmation (from Binance winning strategy)
             volume_mult = getattr(self.config, 'volume_multiplier', 1.5)
             vol_confirmed, vol_ratio = analyzer.check_volume_confirmation(volume_mult)
             if not vol_confirmed:
-                logger.debug(f"  {symbol}: Skipped - volume too low ({vol_ratio:.1f}x < {volume_mult}x)")
+                logger.info(f"  {symbol}: Skipped - volume {vol_ratio:.1f}x (need {volume_mult}x)")
                 return None
 
             # Generate signal
@@ -256,7 +256,7 @@ class DecisionEngine:
             # Use momentum score if available
             momentum_score = analyzer.get_momentum_score()
             if momentum_score < 0.5:
-                logger.debug(f"  {symbol}: Skipped - momentum score too low ({momentum_score:.0%})")
+                logger.info(f"  {symbol}: Skipped - momentum {momentum_score:.0%} (need 50%+)")
                 return None
 
             # Get current price
