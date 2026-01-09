@@ -72,7 +72,7 @@ class TradingConfig:
 
     # Entry filters (from Binance winning strategy)
     min_signal_strength: float = 0.60   # Only enter on 60%+ signals (was 50%)
-    volume_multiplier: float = 1.1      # Require 1.1x average volume (stocks less volatile than crypto)
+    volume_multiplier: float = 1.0      # Require at least average volume (stocks less volatile than crypto)
     require_bullish_trend: bool = True  # Only trade BULLISH trends
 
     # Anti-churning protections
