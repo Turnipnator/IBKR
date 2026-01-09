@@ -71,7 +71,8 @@ class TradingConfig:
     rsi_oversold: int = 30
 
     # Entry filters (from Binance winning strategy)
-    min_signal_strength: float = 0.60   # Only enter on 60%+ signals (was 50%)
+    # TODO: Review signal_strength on 2026-01-16 - lowered from 60% to 50% on Jan 9
+    min_signal_strength: float = 0.50   # 50% = 2 of 4 indicators (EMA, RSI, MACD, BB)
     volume_multiplier: float = 1.0      # Require at least average volume (stocks less volatile than crypto)
     require_bullish_trend: bool = True  # Only trade BULLISH trends
 
