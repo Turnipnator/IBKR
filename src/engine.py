@@ -262,6 +262,12 @@ class DecisionEngine:
             # Get current price
             current_price = float(df['close'].iloc[-1])
 
+            # RSI filter - block BUY signals when overbought
+            rsi_value = signal.indicators.get('rsi')
+            if signal.action == 'BUY' and rsi_value and rsi_value > self.config.rsi_overbought:
+                logger.info(f"  {symbol}: Skipped - RSI overbought ({rsi_value:.1f} > {self.config.rsi_overbought})")
+                return None
+
             # Check existing position
             existing_position = self.position_manager.get_position_quantity(symbol)
 

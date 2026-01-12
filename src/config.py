@@ -71,8 +71,8 @@ class TradingConfig:
     rsi_oversold: int = 30
 
     # Entry filters (from Binance winning strategy)
-    # TODO: Review signal_strength on 2026-01-16 - lowered from 60% to 50% on Jan 9
-    min_signal_strength: float = 0.50   # 50% = 2 of 4 indicators (EMA, RSI, MACD, BB)
+    # Raised from 50% to 75% on Jan 12 - require 3 of 4 indicators
+    min_signal_strength: float = 0.75   # 75% = 3 of 4 indicators (EMA, RSI, MACD, BB)
     volume_multiplier: float = 1.0      # Require at least average volume (stocks less volatile than crypto)
     require_bullish_trend: bool = True  # Only trade BULLISH trends
 
@@ -80,6 +80,7 @@ class TradingConfig:
     cooldown_minutes: int = 20          # Cooldown after stop loss hit
     max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
     max_daily_loss: float = 5000.0      # Stop trading if daily loss exceeds this
+    max_open_positions: int = 3         # Max open positions at any time
 
     # Scalping-specific settings
     bar_size: str = "5 mins"       # 5-minute candles for scalping

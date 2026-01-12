@@ -479,13 +479,14 @@ Bot is now monitoring the market.
             logger.debug(f"Error fetching Telegram updates: {e}")
             return []
 
-    def process_command(self, text: str, db=None) -> Optional[str]:
+    def process_command(self, text: str, db=None, price_fetcher=None) -> Optional[str]:
         """
         Process a command and return the response.
 
         Args:
             text: The command text (e.g., "/status")
             db: Database instance for fetching trade data
+            price_fetcher: Optional callable that takes list of symbols and returns dict of prices
 
         Returns:
             Response message or None if not a command
@@ -496,7 +497,7 @@ Bot is now monitoring the market.
         command = text.split()[0].lower()
 
         if command in ["/status", "/positions", "/pos"]:
-            return self._handle_positions_command(db)
+            return self._handle_positions_command(db, price_fetcher)
         elif command in ["/stats", "/performance"]:
             return self._handle_stats_command(db)
         elif command in ["/help", "/start"]:
@@ -504,8 +505,8 @@ Bot is now monitoring the market.
 
         return None
 
-    def _handle_positions_command(self, db) -> str:
-        """Handle /positions command - show open paper trades."""
+    def _handle_positions_command(self, db, price_fetcher=None) -> str:
+        """Handle /positions command - show open paper trades with P&L."""
         if db is None:
             return "\u26A0\uFE0F Cannot fetch positions - no database connection"
 
@@ -515,8 +516,19 @@ Bot is now monitoring the market.
             if not trades:
                 return "\U0001F4CB <b>Open Positions</b>\n\nNo open paper trades."
 
-            lines = ["\U0001F4CB <b>Open Positions</b>\n"]
-            total_value = 0
+            # Fetch current prices if price_fetcher available
+            current_prices = {}
+            if price_fetcher:
+                symbols = [t['symbol'] for t in trades]
+                try:
+                    current_prices = price_fetcher(symbols)
+                except Exception as e:
+                    logger.warning(f"Could not fetch current prices: {e}")
+
+            lines = [f"\U0001F4CB <b>Open Positions</b> ({len(trades)})\n"]
+            total_entry_value = 0
+            total_current_value = 0
+            total_pnl = 0
 
             for trade in trades:
                 symbol = trade['symbol']
@@ -524,23 +536,54 @@ Bot is now monitoring the market.
                 entry = trade['entry_price']
                 sl = trade.get('stop_loss')
                 tp = trade.get('take_profit')
-                entry_time = trade.get('entry_time', 'Unknown')
 
-                value = qty * entry
-                total_value += value
+                entry_value = qty * entry
+                total_entry_value += entry_value
 
-                sl_text = f"${sl:.2f}" if sl else "N/A"
-                tp_text = f"${tp:.2f}" if tp else "N/A"
+                # Calculate P&L if we have current price
+                current = current_prices.get(symbol)
+                if current:
+                    pnl_amount = (current - entry) * qty
+                    pnl_pct = ((current - entry) / entry) * 100
+                    total_pnl += pnl_amount
+                    current_value = qty * current
+                    total_current_value += current_value
+
+                    # Emoji based on P&L
+                    if pnl_pct >= 1.0:
+                        emoji = "\U0001F7E2"  # Green circle
+                    elif pnl_pct >= 0:
+                        emoji = "\U0001F7E1"  # Yellow circle
+                    elif pnl_pct > -1.5:
+                        emoji = "\U0001F7E0"  # Orange circle
+                    else:
+                        emoji = "\U0001F534"  # Red circle
+
+                    pnl_sign = "+" if pnl_pct >= 0 else ""
+                    pnl_text = f"{emoji} {pnl_sign}{pnl_pct:.2f}% (${pnl_sign}{pnl_amount:.2f})"
+                    price_text = f"Now: ${current:.2f}"
+                else:
+                    pnl_text = "P&L: N/A"
+                    price_text = ""
+                    total_current_value += entry_value
+
+                # SL/TP distance
+                sl_dist = ((sl - entry) / entry * 100) if sl else 0
+                tp_dist = ((tp - entry) / entry * 100) if tp else 0
 
                 lines.append(
-                    f"\n<b>#{trade['id']} {symbol}</b>\n"
-                    f"  {qty} shares @ ${entry:.2f}\n"
-                    f"  Value: ${value:,.2f}\n"
-                    f"  SL: {sl_text} | TP: {tp_text}\n"
-                    f"  <i>Opened: {entry_time[:16]}</i>"
+                    f"\n<b>{symbol}</b> {pnl_text}\n"
+                    f"  Entry: ${entry:.2f} | {price_text}\n"
+                    f"  SL: {sl_dist:.1f}% | TP: +{tp_dist:.1f}%"
                 )
 
-            lines.append(f"\n\n<b>Total Value:</b> ${total_value:,.2f}")
+            # Summary
+            if current_prices:
+                total_pnl_pct = (total_pnl / total_entry_value * 100) if total_entry_value else 0
+                pnl_emoji = "\U0001F7E2" if total_pnl >= 0 else "\U0001F534"
+                pnl_sign = "+" if total_pnl >= 0 else ""
+                lines.append(f"\n\n{pnl_emoji} <b>Total P&L:</b> {pnl_sign}{total_pnl_pct:.2f}% (${pnl_sign}{total_pnl:.2f})")
+
             lines.append(f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>")
 
             return "\n".join(lines)
@@ -615,13 +658,14 @@ def get_notifier() -> TelegramNotifier:
     return _notifier
 
 
-def check_telegram_commands(db=None) -> None:
+def check_telegram_commands(db=None, price_fetcher=None) -> None:
     """
     Check for and process any pending Telegram commands.
     Call this periodically from the main bot loop.
 
     Args:
         db: Database instance for fetching trade data
+        price_fetcher: Optional callable that takes list of symbols and returns dict of prices
     """
     global _last_update_id
 
@@ -643,7 +687,7 @@ def check_telegram_commands(db=None) -> None:
             if str(chat_id) != notifier.config.chat_id:
                 continue
 
-            response = notifier.process_command(text, db)
+            response = notifier.process_command(text, db, price_fetcher)
             if response:
                 notifier.send_sync(response)
                 logger.info(f"Responded to Telegram command: {text}")

@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from .connection import ConnectionManager
 from .engine import DecisionEngine
 from .database import Database
-from .config import ibkr_config, telegram_config
+from .config import ibkr_config, telegram_config, trading_config
 from .telegram_bot import TelegramNotifier, get_notifier, check_telegram_commands
 
 logger = logging.getLogger(__name__)
@@ -299,6 +299,12 @@ class TradingBot:
 
             # In dry run mode, save as paper trade for tracking
             if self.dry_run:
+                # Check max open positions limit
+                open_trades = self.db.get_open_paper_trades()
+                if len(open_trades) >= trading_config.max_open_positions:
+                    logger.info(f"  Skipping {opp.symbol} - max open positions ({trading_config.max_open_positions}) reached")
+                    continue
+
                 # Only open paper trade if we don't already have one for this symbol
                 if not self.db.has_open_paper_trade(opp.symbol):
                     trade_id = self.db.save_paper_trade(
@@ -421,13 +427,19 @@ class TradingBot:
                     logger.info("Outside market hours, waiting...")
                     # Reset failure counter - don't alert for off-hours issues
                     self._consecutive_failures = 0
-                    # Still check for Telegram commands while waiting
-                    check_telegram_commands(self.db)
+                    # Still check for Telegram commands while waiting (no price fetcher outside hours)
+                    check_telegram_commands(self.db, None)
                     time.sleep(60)  # Check every minute
                     continue
 
                 # Run analysis
                 self.run_once()
+
+                # Create price fetcher for telegram commands (connection should be active)
+                def get_prices(symbols):
+                    if self.data_fetcher and self.connection.ensure_connected():
+                        return self.data_fetcher.get_latest_prices(symbols)
+                    return {}
 
                 # Wait for next run, checking for Telegram commands periodically
                 if self.running:
@@ -437,7 +449,7 @@ class TradingBot:
                             break
                         # Check for Telegram commands every 5 seconds
                         if i % 5 == 0:
-                            check_telegram_commands(self.db)
+                            check_telegram_commands(self.db, get_prices)
                         time.sleep(1)
 
         except Exception as e:
