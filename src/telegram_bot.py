@@ -447,8 +447,164 @@ Bot is now monitoring the market.
         return self.send_sync(message.strip())
 
 
+    # ==================== Command Handling ====================
+
+    def get_updates(self, offset: int = 0) -> list[dict]:
+        """
+        Fetch new messages/commands from Telegram.
+
+        Args:
+            offset: Update ID to start from (use last_update_id + 1)
+
+        Returns:
+            List of update objects
+        """
+        if not self.enabled:
+            return []
+
+        try:
+            url = f"https://api.telegram.org/bot{self.config.bot_token}/getUpdates"
+            params = {"offset": offset, "timeout": 1}
+
+            req_url = f"{url}?offset={offset}&timeout=1"
+            req = urllib.request.Request(req_url, method="GET")
+
+            with urllib.request.urlopen(req, timeout=5) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                if result.get("ok"):
+                    return result.get("result", [])
+                return []
+
+        except Exception as e:
+            logger.debug(f"Error fetching Telegram updates: {e}")
+            return []
+
+    def process_command(self, text: str, db=None) -> Optional[str]:
+        """
+        Process a command and return the response.
+
+        Args:
+            text: The command text (e.g., "/status")
+            db: Database instance for fetching trade data
+
+        Returns:
+            Response message or None if not a command
+        """
+        if not text.startswith("/"):
+            return None
+
+        command = text.split()[0].lower()
+
+        if command in ["/status", "/positions", "/pos"]:
+            return self._handle_positions_command(db)
+        elif command in ["/stats", "/performance"]:
+            return self._handle_stats_command(db)
+        elif command in ["/help", "/start"]:
+            return self._handle_help_command()
+
+        return None
+
+    def _handle_positions_command(self, db) -> str:
+        """Handle /positions command - show open paper trades."""
+        if db is None:
+            return "\u26A0\uFE0F Cannot fetch positions - no database connection"
+
+        try:
+            trades = db.get_open_paper_trades()
+
+            if not trades:
+                return "\U0001F4CB <b>Open Positions</b>\n\nNo open paper trades."
+
+            lines = ["\U0001F4CB <b>Open Positions</b>\n"]
+            total_value = 0
+
+            for trade in trades:
+                symbol = trade['symbol']
+                qty = trade['quantity']
+                entry = trade['entry_price']
+                sl = trade.get('stop_loss')
+                tp = trade.get('take_profit')
+                entry_time = trade.get('entry_time', 'Unknown')
+
+                value = qty * entry
+                total_value += value
+
+                sl_text = f"${sl:.2f}" if sl else "N/A"
+                tp_text = f"${tp:.2f}" if tp else "N/A"
+
+                lines.append(
+                    f"\n<b>#{trade['id']} {symbol}</b>\n"
+                    f"  {qty} shares @ ${entry:.2f}\n"
+                    f"  Value: ${value:,.2f}\n"
+                    f"  SL: {sl_text} | TP: {tp_text}\n"
+                    f"  <i>Opened: {entry_time[:16]}</i>"
+                )
+
+            lines.append(f"\n\n<b>Total Value:</b> ${total_value:,.2f}")
+            lines.append(f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error fetching positions: {e}")
+            return f"\u26A0\uFE0F Error fetching positions: {e}"
+
+    def _handle_stats_command(self, db) -> str:
+        """Handle /stats command - show paper trade statistics."""
+        if db is None:
+            return "\u26A0\uFE0F Cannot fetch stats - no database connection"
+
+        try:
+            stats = db.get_paper_trade_stats()
+
+            pnl = stats['total_pnl']
+            pnl_emoji = "\U0001F7E2" if pnl >= 0 else "\U0001F534"
+            pnl_sign = "+" if pnl >= 0 else ""
+
+            win_rate = stats['win_rate']
+            if win_rate >= 60:
+                perf_emoji = "\U0001F525"
+            elif win_rate >= 50:
+                perf_emoji = "\u2705"
+            else:
+                perf_emoji = "\U0001F7E1"
+
+            return f"""\U0001F4CA <b>Paper Trading Stats</b>
+
+<b>Total Trades:</b> {stats['total_trades']}
+<b>Open:</b> {stats['open_trades']}
+<b>Closed:</b> {stats['closed_trades']}
+
+<b>Winners:</b> {stats['winning_trades']}
+<b>Losers:</b> {stats['losing_trades']}
+<b>Win Rate:</b> {win_rate:.1f}% {perf_emoji}
+
+{pnl_emoji} <b>Total P&L:</b> {pnl_sign}${pnl:,.2f}
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"""
+
+        except Exception as e:
+            logger.error(f"Error fetching stats: {e}")
+            return f"\u26A0\uFE0F Error fetching stats: {e}"
+
+    def _handle_help_command(self) -> str:
+        """Handle /help command."""
+        return """\U0001F916 <b>IBKR Trading Bot Commands</b>
+
+<b>/positions</b> - Show open paper trades
+<b>/stats</b> - Show trading statistics
+<b>/help</b> - Show this help message
+
+The bot will automatically notify you of:
+\u2022 New trade opportunities
+\u2022 Paper trades opened/closed
+\u2022 Daily summaries
+\u2022 Connection issues"""
+
+
 # Singleton notifier instance
 _notifier: Optional[TelegramNotifier] = None
+_last_update_id: int = 0
 
 
 def get_notifier() -> TelegramNotifier:
@@ -457,3 +613,40 @@ def get_notifier() -> TelegramNotifier:
     if _notifier is None:
         _notifier = TelegramNotifier()
     return _notifier
+
+
+def check_telegram_commands(db=None) -> None:
+    """
+    Check for and process any pending Telegram commands.
+    Call this periodically from the main bot loop.
+
+    Args:
+        db: Database instance for fetching trade data
+    """
+    global _last_update_id
+
+    notifier = get_notifier()
+    if not notifier.enabled:
+        return
+
+    try:
+        updates = notifier.get_updates(offset=_last_update_id)
+
+        for update in updates:
+            _last_update_id = update.get("update_id", 0) + 1
+
+            message = update.get("message", {})
+            text = message.get("text", "")
+            chat_id = message.get("chat", {}).get("id")
+
+            # Only respond to messages from the configured chat
+            if str(chat_id) != notifier.config.chat_id:
+                continue
+
+            response = notifier.process_command(text, db)
+            if response:
+                notifier.send_sync(response)
+                logger.info(f"Responded to Telegram command: {text}")
+
+    except Exception as e:
+        logger.debug(f"Error checking Telegram commands: {e}")

@@ -20,7 +20,7 @@ from .connection import ConnectionManager
 from .engine import DecisionEngine
 from .database import Database
 from .config import ibkr_config, telegram_config
-from .telegram_bot import TelegramNotifier, get_notifier
+from .telegram_bot import TelegramNotifier, get_notifier, check_telegram_commands
 
 logger = logging.getLogger(__name__)
 
@@ -421,18 +421,23 @@ class TradingBot:
                     logger.info("Outside market hours, waiting...")
                     # Reset failure counter - don't alert for off-hours issues
                     self._consecutive_failures = 0
+                    # Still check for Telegram commands while waiting
+                    check_telegram_commands(self.db)
                     time.sleep(60)  # Check every minute
                     continue
 
                 # Run analysis
                 self.run_once()
 
-                # Wait for next run
+                # Wait for next run, checking for Telegram commands periodically
                 if self.running:
                     logger.info(f"Next run in {self.run_interval // 60} minutes...")
-                    for _ in range(self.run_interval):
+                    for i in range(self.run_interval):
                         if not self.running:
                             break
+                        # Check for Telegram commands every 5 seconds
+                        if i % 5 == 0:
+                            check_telegram_commands(self.db)
                         time.sleep(1)
 
         except Exception as e:
