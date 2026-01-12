@@ -73,6 +73,11 @@ class TradingBot:
         # Track daily summary sent status
         self._last_summary_date: Optional[str] = None
 
+        # Track connection failures for alerting
+        self._consecutive_failures = 0
+        self._failure_alert_threshold = 3  # Alert after 3 consecutive failures
+        self._last_failure_alert: Optional[str] = None  # Prevent spam
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -225,7 +230,25 @@ class TradingBot:
         """
         if not self.connection.ensure_connected():
             logger.error("Failed to connect to IBKR")
+            self._consecutive_failures += 1
+
+            # Send alert after threshold consecutive failures (once per day max)
+            today = datetime.now().strftime('%Y-%m-%d')
+            if (self._consecutive_failures >= self._failure_alert_threshold
+                and self._last_failure_alert != today):
+                if self.notifier and self.notifier.enabled:
+                    self.notifier.notify_error(
+                        f"Connection failed {self._consecutive_failures} consecutive times. "
+                        f"Check IB Gateway status.",
+                        "Connection"
+                    )
+                self._last_failure_alert = today
+                logger.warning(f"Sent connection failure alert (attempt #{self._consecutive_failures})")
+
             return {"success": False, "error": "Connection failed"}
+
+        # Reset failure counter on successful connection
+        self._consecutive_failures = 0
 
         logger.info("=" * 50)
         logger.info(f"TRADING BOT RUN - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -392,9 +415,12 @@ class TradingBot:
                 if now_et.hour == 15 and now_et.minute >= 55:
                     self._send_daily_summary()
 
-                # Check market hours
+                # Check market hours - skip everything if outside hours
+                # This prevents reconnection attempts during weekends/after hours
                 if not self._is_market_hours():
                     logger.info("Outside market hours, waiting...")
+                    # Reset failure counter - don't alert for off-hours issues
+                    self._consecutive_failures = 0
                     time.sleep(60)  # Check every minute
                     continue
 
