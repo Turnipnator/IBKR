@@ -437,8 +437,8 @@ class TradingBot:
 
                 # Create price fetcher for telegram commands (connection should be active)
                 def get_prices(symbols):
-                    if self.data_fetcher and self.connection.ensure_connected():
-                        return self.data_fetcher.get_latest_prices(symbols)
+                    if self.engine and self.engine.fetcher and self.connection.ensure_connected():
+                        return self.engine.fetcher.get_latest_prices(symbols)
                     return {}
 
                 # Wait for next run, checking for Telegram commands periodically

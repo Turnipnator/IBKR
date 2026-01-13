@@ -560,22 +560,24 @@ Bot is now monitoring the market.
                         emoji = "\U0001F534"  # Red circle
 
                     pnl_sign = "+" if pnl_pct >= 0 else ""
-                    pnl_text = f"{emoji} {pnl_sign}{pnl_pct:.2f}% (${pnl_sign}{pnl_amount:.2f})"
-                    price_text = f"Now: ${current:.2f}"
+
+                    # Distance to SL and TP from current price
+                    to_sl = ((current - sl) / current * 100) if sl else 0
+                    to_tp = ((tp - current) / current * 100) if tp else 0
+
+                    lines.append(
+                        f"\n<b>{symbol}</b> {emoji} {pnl_sign}{pnl_pct:.2f}%\n"
+                        f"  ${entry:.2f} \u2192 ${current:.2f}\n"
+                        f"  SL ${sl:.2f} ({to_sl:.1f}% away) | TP ${tp:.2f} ({to_tp:.1f}% away)"
+                    )
                 else:
-                    pnl_text = "P&L: N/A"
-                    price_text = ""
+                    # No current price - show entry and targets
                     total_current_value += entry_value
-
-                # SL/TP distance
-                sl_dist = ((sl - entry) / entry * 100) if sl else 0
-                tp_dist = ((tp - entry) / entry * 100) if tp else 0
-
-                lines.append(
-                    f"\n<b>{symbol}</b> {pnl_text}\n"
-                    f"  Entry: ${entry:.2f} | {price_text}\n"
-                    f"  SL: {sl_dist:.1f}% | TP: +{tp_dist:.1f}%"
-                )
+                    lines.append(
+                        f"\n<b>{symbol}</b> (no live price)\n"
+                        f"  Entry: ${entry:.2f}\n"
+                        f"  SL: ${sl:.2f} | TP: ${tp:.2f}"
+                    )
 
             # Summary
             if current_prices:
