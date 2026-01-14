@@ -320,6 +320,48 @@ class DecisionEngine:
             self.state.errors.append(f"{symbol}: {str(e)}")
             return None
 
+    def _check_market_condition(self) -> tuple[bool, str]:
+        """
+        Check overall market condition using SPY as a proxy.
+        Only trade when the market is bullish.
+
+        Returns:
+            Tuple of (is_bullish, reason)
+        """
+        try:
+            logger.info("Checking market condition (SPY)...")
+            df = self.fetcher.get_historical_data("SPY", duration=self.config.data_duration,
+                                                  bar_size=self.config.bar_size)
+
+            if df is None or df.empty or len(df) < 50:
+                logger.warning("Could not fetch SPY data for market check")
+                return (True, "SPY data unavailable - proceeding with caution")
+
+            analyzer = TechnicalAnalyzer(
+                df,
+                sma_fast=self.config.ema_fast,
+                sma_slow=self.config.ema_slow,
+                ema_trend=self.config.ema_trend,
+                rsi_period=self.config.rsi_period,
+                use_ema=True,
+            )
+            analyzer.calculate_all()
+
+            trend = analyzer.detect_trend()
+            latest = df.iloc[-1]
+            spy_price = latest['close']
+
+            if trend == 'BULLISH':
+                return (True, f"SPY ${spy_price:.2f} - BULLISH")
+            elif trend == 'BEARISH':
+                return (False, f"SPY ${spy_price:.2f} - BEARISH (market weak, skipping trades)")
+            else:
+                return (False, f"SPY ${spy_price:.2f} - SIDEWAYS (choppy market, skipping trades)")
+
+        except Exception as e:
+            logger.error(f"Error checking market condition: {e}")
+            return (True, f"Market check failed: {e} - proceeding with caution")
+
     def run_analysis(self) -> list[TradeOpportunity]:
         """
         Run analysis on all symbols without executing trades.
@@ -333,6 +375,14 @@ class DecisionEngine:
 
         logger.info("Starting market analysis...")
         self.state = EngineState(last_run=datetime.now())
+
+        # Check market condition first (SPY filter)
+        market_ok, market_reason = self._check_market_condition()
+        logger.info(f"Market condition: {market_reason}")
+
+        if not market_ok:
+            logger.info("Skipping analysis - unfavourable market conditions")
+            return []
 
         symbols = self._get_all_symbols()
         opportunities = []
