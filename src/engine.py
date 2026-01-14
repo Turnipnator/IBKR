@@ -54,6 +54,8 @@ class EngineState:
     trades_executed: int = 0
     errors: list[str] = field(default_factory=list)
     opportunities: list[TradeOpportunity] = field(default_factory=list)
+    market_ok: bool = True
+    market_reason: str = ""
 
 
 class DecisionEngine:
@@ -378,11 +380,9 @@ class DecisionEngine:
 
         # Check market condition first (SPY filter)
         market_ok, market_reason = self._check_market_condition()
+        self.state.market_ok = market_ok
+        self.state.market_reason = market_reason
         logger.info(f"Market condition: {market_reason}")
-
-        if not market_ok:
-            logger.info("Skipping analysis - unfavourable market conditions")
-            return []
 
         symbols = self._get_all_symbols()
         opportunities = []

@@ -299,6 +299,11 @@ class TradingBot:
 
             # In dry run mode, save as paper trade for tracking
             if self.dry_run:
+                # Check market condition - don't trade if SPY is weak
+                if not self.engine.state.market_ok:
+                    logger.info(f"  Skipping {opp.symbol} - {self.engine.state.market_reason}")
+                    continue
+
                 # Check max open positions limit
                 open_trades = self.db.get_open_paper_trades()
                 if len(open_trades) >= trading_config.max_open_positions:
@@ -380,12 +385,20 @@ class TradingBot:
 
         # Send analysis complete notification
         if self.notifier and self.notifier.enabled:
-            self.notifier.notify_analysis_complete(
-                symbols_analyzed=results["symbols_analyzed"],
-                opportunities=results["opportunities"],
-                trades_executed=results["trades_executed"],
-                dry_run=self.dry_run,
-            )
+            # If market was weak but we found opportunities, send special notification
+            if not self.engine.state.market_ok and opportunities:
+                self.notifier.notify_market_blocked(
+                    opportunities=opportunities,
+                    market_reason=self.engine.state.market_reason,
+                    symbols_analyzed=results["symbols_analyzed"],
+                )
+            else:
+                self.notifier.notify_analysis_complete(
+                    symbols_analyzed=results["symbols_analyzed"],
+                    opportunities=results["opportunities"],
+                    trades_executed=results["trades_executed"],
+                    dry_run=self.dry_run,
+                )
 
         # Status report
         logger.info("\n" + self.engine.get_status_report())

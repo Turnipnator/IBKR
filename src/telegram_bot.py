@@ -238,6 +238,42 @@ Bot is now monitoring the market.
 """
         return self.send_sync(message.strip())
 
+    def notify_market_blocked(
+        self,
+        opportunities: list,
+        market_reason: str,
+        symbols_analyzed: int,
+    ) -> bool:
+        """Send notification when opportunities found but blocked by market condition."""
+        emoji = "\u26A0\uFE0F"  # Warning
+
+        # Build opportunity list
+        opp_lines = []
+        for opp in opportunities[:5]:  # Limit to 5
+            opp_lines.append(
+                f"  \u2022 {opp.symbol} @ ${opp.current_price:.2f} ({opp.signal.strength:.0%})"
+            )
+
+        opp_text = "\n".join(opp_lines) if opp_lines else "  None"
+        more_text = f"\n  ... and {len(opportunities) - 5} more" if len(opportunities) > 5 else ""
+
+        message = f"""
+{emoji} <b>Analysis Complete - Market Weak</b>
+
+<b>Market:</b> {market_reason}
+
+<b>Symbols Analyzed:</b> {symbols_analyzed}
+<b>Opportunities Found:</b> {len(opportunities)}
+
+<b>Would have traded:</b>
+{opp_text}{more_text}
+
+<i>No trades opened due to weak market conditions.</i>
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
     # ==================== Paper Trade Notifications ====================
 
     def notify_paper_trade_opened(
