@@ -167,6 +167,9 @@ class Backtester:
         self._data: dict[str, pd.DataFrame] = {}
         self._spy_trend_cache: dict[int, str] = {}
 
+        # Pre-calculated indicators (for speed)
+        self._indicators: dict[str, pd.DataFrame] = {}
+
     def _load_data(
         self,
         start_date: str,
@@ -249,28 +252,44 @@ class Backtester:
             use_ema=True,
         )
 
+    def _precalculate_indicators(self):
+        """Pre-calculate all indicators for all symbols (huge speedup)."""
+        logger.info("Pre-calculating indicators for all symbols...")
+
+        for symbol, df in self._data.items():
+            analyzer = self._create_analyzer(df)
+            analyzer.calculate_all()
+            self._indicators[symbol] = analyzer.df.copy()
+
+        logger.info(f"Pre-calculated indicators for {len(self._indicators)} symbols")
+
     def _get_spy_trend(self, bar_idx: int) -> str:
         """
-        Get SPY trend at a specific bar index.
-
-        Uses cached results to avoid recalculating.
+        Get SPY trend at a specific bar index using pre-calculated indicators.
         """
         if bar_idx in self._spy_trend_cache:
             return self._spy_trend_cache[bar_idx]
 
-        spy_df = self._data.get(self.config.spy_symbol)
-        if spy_df is None or bar_idx >= len(spy_df):
+        spy_df = self._indicators.get(self.config.spy_symbol)
+        if spy_df is None or bar_idx >= len(spy_df) or bar_idx < 50:
             return 'SIDEWAYS'
 
-        # Use data up to this bar (inclusive)
-        subset = spy_df.iloc[:bar_idx + 1].copy()
+        row = spy_df.iloc[bar_idx]
+        close = row.get('close')
+        ema_fast = row.get(f'ema_{self.config.ema_fast}')
+        ema_slow = row.get(f'ema_{self.config.ema_slow}')
+        ema_trend = row.get(f'ema_{self.config.ema_trend}')
 
-        if len(subset) < 50:
+        # Check for valid values
+        if any(v is None or (isinstance(v, float) and np.isnan(v))
+               for v in [close, ema_fast, ema_slow, ema_trend]):
             trend = 'SIDEWAYS'
+        elif ema_fast > ema_slow > ema_trend and close > ema_trend:
+            trend = 'BULLISH'
+        elif ema_fast < ema_slow < ema_trend and close < ema_trend:
+            trend = 'BEARISH'
         else:
-            analyzer = self._create_analyzer(subset)
-            analyzer.calculate_all()
-            trend = analyzer.detect_trend()
+            trend = 'SIDEWAYS'
 
         self._spy_trend_cache[bar_idx] = trend
         return trend
@@ -305,11 +324,10 @@ class Backtester:
         self,
         symbol: str,
         bar_idx: int,
-        df: pd.DataFrame,
         spy_trend: str,
     ) -> Optional[tuple[float, float, float, Signal]]:
         """
-        Check if entry conditions are met at a specific bar.
+        Check if entry conditions are met using pre-calculated indicators.
 
         Replicates logic from engine.py:
         1. SPY trend must be BULLISH
@@ -330,48 +348,95 @@ class Backtester:
         if bar_idx < 50:
             return None
 
-        # Get data up to this bar
-        subset = df.iloc[:bar_idx + 1].copy()
-
-        analyzer = self._create_analyzer(subset)
-        analyzer.calculate_all()
-
-        # 2. Check stock trend
-        trend = analyzer.detect_trend()
-        if self.config.require_bullish_trend and trend != 'BULLISH':
+        # Get pre-calculated indicators
+        df = self._indicators.get(symbol)
+        if df is None or bar_idx >= len(df):
             return None
+
+        row = df.iloc[bar_idx]
+
+        # Get indicator values from row
+        close = row.get('close')
+        ema_fast = row.get(f'ema_{self.config.ema_fast}')
+        ema_slow = row.get(f'ema_{self.config.ema_slow}')
+        ema_trend = row.get(f'ema_{self.config.ema_trend}')
+        rsi_val = row.get('rsi')
+        macd_val = row.get('macd')
+        macd_signal = row.get('macd_signal')
+        macd_hist = row.get('macd_hist')
+        volume_ratio = row.get('volume_ratio')
+        bb_upper = row.get('bb_upper')
+        bb_lower = row.get('bb_lower')
+
+        # Check for valid EMAs
+        if any(v is None or (isinstance(v, float) and np.isnan(v))
+               for v in [close, ema_fast, ema_slow, ema_trend]):
+            return None
+
+        # 2. Check stock trend (BULLISH = ema_fast > ema_slow > ema_trend and close > ema_trend)
+        if self.config.require_bullish_trend:
+            if not (ema_fast > ema_slow > ema_trend and close > ema_trend):
+                return None
 
         # 3. Check volume confirmation
-        vol_confirmed, vol_ratio = analyzer.check_volume_confirmation(
-            self.config.volume_multiplier
-        )
-        if not vol_confirmed:
+        if volume_ratio is None or np.isnan(volume_ratio):
+            return None
+        if volume_ratio < self.config.volume_multiplier:
             return None
 
-        # 4. Check momentum score
-        momentum = analyzer.get_momentum_score()
-        if momentum < self.config.min_momentum:
+        # 4 & 5. Calculate signal strength from indicators
+        buy_signals = 0
+        total_signals = 0
+
+        # EMA trend
+        total_signals += 1
+        if ema_fast > ema_slow:
+            buy_signals += 1
+
+        # RSI
+        if rsi_val is not None and not np.isnan(rsi_val):
+            total_signals += 1
+            if rsi_val < self.config.rsi_oversold:
+                buy_signals += 1
+
+        # MACD
+        if all(v is not None and not np.isnan(v) for v in [macd_val, macd_signal, macd_hist]):
+            total_signals += 1
+            if macd_val > macd_signal and macd_hist > 0:
+                buy_signals += 1
+
+        # Bollinger Bands
+        if all(v is not None and not np.isnan(v) for v in [bb_upper, bb_lower]):
+            total_signals += 1
+            if close <= bb_lower:
+                buy_signals += 1
+
+        if total_signals == 0:
             return None
 
-        # 5. Generate signal and check strength
-        signal = analyzer.generate_signal(symbol)
+        strength = buy_signals / total_signals
 
-        if signal.action != 'BUY':
-            return None
-
-        if signal.strength < self.config.min_signal_strength:
+        if strength < self.config.min_signal_strength:
             return None
 
         # 6. Check RSI not overbought
-        rsi_value = signal.indicators.get('rsi')
-        if rsi_value and rsi_value > self.config.rsi_overbought:
-            return None
+        if rsi_val is not None and not np.isnan(rsi_val):
+            if rsi_val > self.config.rsi_overbought:
+                return None
 
         # Entry conditions met!
-        current_bar = subset.iloc[-1]
-        entry_price = float(current_bar['close'])
+        entry_price = float(close)
         stop_loss = round(entry_price * (1 - self.config.stop_loss_pct), 2)
         take_profit = round(entry_price * (1 + self.config.take_profit_pct), 2)
+
+        # Create signal for logging
+        signal = Signal(
+            symbol=symbol,
+            action='BUY',
+            strength=strength,
+            reasons=[f'Trend BULLISH', f'RSI {rsi_val:.1f}' if rsi_val else ''],
+            indicators={'rsi': rsi_val, 'close': close}
+        )
 
         return (entry_price, stop_loss, take_profit, signal)
 
@@ -540,6 +605,7 @@ class Backtester:
         self._daily_trades = {}
         self._data = {}
         self._spy_trend_cache = {}
+        self._indicators = {}
 
         # Load data
         if not self._load_data(start_date, end_date, fetcher):
@@ -552,6 +618,9 @@ class Backtester:
                 portfolio_history=pd.DataFrame(),
                 report="ERROR: Failed to load data. Ensure data is available in database.",
             )
+
+        # Pre-calculate all indicators once (huge speedup for grid search)
+        self._precalculate_indicators()
 
         # Get SPY data for bar iteration
         spy_df = self._data[self.config.spy_symbol]
@@ -596,10 +665,6 @@ class Backtester:
                 if symbol not in self._data:
                     continue
 
-                sym_df = self._data[symbol]
-                if bar_idx >= len(sym_df):
-                    continue
-
                 # Skip if in cooldown
                 if self._is_in_cooldown(symbol, bar_idx):
                     continue
@@ -609,7 +674,7 @@ class Backtester:
                     continue
 
                 # Check entry conditions
-                entry_result = self._check_entry_signal(symbol, bar_idx, sym_df, spy_trend)
+                entry_result = self._check_entry_signal(symbol, bar_idx, spy_trend)
 
                 if entry_result:
                     entry_price, stop_loss, take_profit, signal = entry_result

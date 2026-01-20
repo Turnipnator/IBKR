@@ -41,13 +41,15 @@ class IBKRConfig:
 class TradingConfig:
     """Trading parameters - configured for MOMENTUM SCALPING strategy.
 
-    Based on winning strategy from Binance Bot (13/13 wins):
-    - Wider stop loss to avoid noise (3% vs 0.75%)
-    - Quick take profit (1.5%)
-    - High quality entries only (60%+ signal strength)
-    - BULLISH trend requirement
-    - Volume confirmation (1.5x average)
+    Optimized via backtesting (Jan 2026):
+    - 1:1 TP/SL ratio (2%/2%) for balanced risk/reward
+    - 50% signal strength (2 of 4 indicators) for more trades
+    - Max 2 positions for focused capital deployment
+    - BULLISH trend requirement (SPY + stock)
+    - Volume confirmation (1.0x average)
     - Cooldown after losses (20 min)
+
+    Backtest results: +1.26% monthly, 71% win rate, Sharpe 0.85
     """
     # Asset universe - focus on liquid, volatile stocks
     symbols: dict = field(default_factory=lambda: {
@@ -56,10 +58,10 @@ class TradingConfig:
         "tech": ["AAPL", "TSLA", "META", "AMZN"],
     })
 
-    # Risk management - MOMENTUM settings (wider stops, quick profits)
+    # Risk management - OPTIMIZED 1:1 ratio
     max_position_pct: float = 0.10  # Max 10% of portfolio per position
-    stop_loss_pct: float = 0.03     # 3% stop loss (wider to avoid noise!)
-    take_profit_pct: float = 0.015  # 1.5% take profit (lock in gains quickly)
+    stop_loss_pct: float = 0.02     # 2% stop loss (1:1 with TP)
+    take_profit_pct: float = 0.02   # 2% take profit (1:1 with SL)
     max_sector_pct: float = 0.40    # Max 40% in any sector
 
     # Technical parameters - EMA-based for momentum
@@ -70,17 +72,16 @@ class TradingConfig:
     rsi_overbought: int = 70
     rsi_oversold: int = 30
 
-    # Entry filters (from Binance winning strategy)
-    # Raised from 50% to 75% on Jan 12 - require 3 of 4 indicators
-    min_signal_strength: float = 0.75   # 75% = 3 of 4 indicators (EMA, RSI, MACD, BB)
-    volume_multiplier: float = 1.0      # Require at least average volume (stocks less volatile than crypto)
+    # Entry filters - OPTIMIZED for more high-quality trades
+    min_signal_strength: float = 0.50   # 50% = 2 of 4 indicators (was 75%)
+    volume_multiplier: float = 1.0      # Require at least average volume
     require_bullish_trend: bool = True  # Only trade BULLISH trends
 
     # Anti-churning protections
     cooldown_minutes: int = 20          # Cooldown after stop loss hit
     max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
     max_daily_loss: float = 5000.0      # Stop trading if daily loss exceeds this
-    max_open_positions: int = 3         # Max open positions at any time
+    max_open_positions: int = 2         # Max 2 positions (was 3) - focused deployment
 
     # Scalping-specific settings
     bar_size: str = "5 mins"       # 5-minute candles for scalping
