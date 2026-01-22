@@ -71,6 +71,9 @@ class BacktestConfig:
     cooldown_bars: int = 4       # 4 bars = 20 min (5-min bars)
     max_trades_per_symbol_day: int = 3
 
+    # Trailing stop option
+    use_trailing_stop: bool = False  # If True, SL trails the high water mark
+
     # Symbols to trade
     symbols: list = field(default_factory=lambda: [
         "GLD", "SLV",           # Precious metals
@@ -101,6 +104,7 @@ class BacktestPosition:
     take_profit: float
     entry_time: datetime
     entry_bar_idx: int
+    high_water_mark: float = 0.0  # For trailing stops
 
 
 @dataclass
@@ -452,11 +456,21 @@ class Backtester:
         - SL hit if bar.low <= stop_loss
         - TP hit if bar.high >= take_profit
 
+        For trailing stops, the stop loss trails the high water mark.
+
         Returns:
             Tuple of (exit_price, exit_reason) or None
         """
         bar_low = float(bar['low'])
         bar_high = float(bar['high'])
+
+        # Update high water mark for trailing stops
+        if self.config.use_trailing_stop and bar_high > position.high_water_mark:
+            position.high_water_mark = bar_high
+            # Update trailing stop loss
+            position.stop_loss = round(
+                position.high_water_mark * (1 - self.config.stop_loss_pct), 2
+            )
 
         # Check stop loss first (assume it triggers before TP if both hit)
         if bar_low <= position.stop_loss:
@@ -497,6 +511,7 @@ class Backtester:
             take_profit=take_profit,
             entry_time=bar_time,
             entry_bar_idx=bar_idx,
+            high_water_mark=entry_price,  # Initialize for trailing stops
         )
 
         self._positions[symbol] = position
