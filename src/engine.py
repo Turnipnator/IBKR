@@ -245,6 +245,14 @@ class DecisionEngine:
                     logger.info(f"  {symbol}: Skipped - trend is {trend} (need BULLISH)")
                     return None
 
+            # Multi-timeframe confirmation: check 1H trend aligns with 5-min
+            use_hourly = getattr(self.config, 'use_hourly_confirmation', False)
+            if use_hourly:
+                hourly_trend = self._check_hourly_trend(symbol)
+                if hourly_trend != 'BULLISH':
+                    logger.info(f"  {symbol}: Skipped - 1H trend is {hourly_trend} (need BULLISH)")
+                    return None
+
             # Check volume confirmation (from Binance winning strategy)
             volume_mult = getattr(self.config, 'volume_multiplier', 1.5)
             vol_confirmed, vol_ratio = analyzer.check_volume_confirmation(volume_mult)
@@ -363,6 +371,44 @@ class DecisionEngine:
         except Exception as e:
             logger.error(f"Error checking market condition: {e}")
             return (True, f"Market check failed: {e} - proceeding with caution")
+
+    def _check_hourly_trend(self, symbol: str) -> str:
+        """
+        Check the 1-hour trend for multi-timeframe confirmation.
+        This helps filter out entries that go against the bigger picture.
+
+        Returns:
+            'BULLISH', 'BEARISH', or 'SIDEWAYS'
+        """
+        try:
+            # Fetch 1-hour bars (need more history for EMAs)
+            df = self.fetcher.get_historical_data(
+                symbol,
+                duration="5 D",  # 5 days of hourly data
+                bar_size="1 hour"
+            )
+
+            if df is None or df.empty or len(df) < 50:
+                logger.debug(f"{symbol}: Insufficient 1H data, defaulting to SIDEWAYS")
+                return 'SIDEWAYS'
+
+            analyzer = TechnicalAnalyzer(
+                df,
+                sma_fast=self.config.ema_fast,
+                sma_slow=self.config.ema_slow,
+                ema_trend=self.config.ema_trend,
+                rsi_period=self.config.rsi_period,
+                use_ema=True,
+            )
+            analyzer.calculate_all()
+
+            trend = analyzer.detect_trend()
+            logger.debug(f"{symbol}: 1H trend is {trend}")
+            return trend
+
+        except Exception as e:
+            logger.warning(f"{symbol}: Error checking 1H trend: {e}")
+            return 'SIDEWAYS'  # Default to sideways on error (blocks entry)
 
     def run_analysis(self) -> list[TradeOpportunity]:
         """

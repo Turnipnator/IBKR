@@ -642,6 +642,11 @@ Bot is now monitoring the market.
             pnl_emoji = "\U0001F7E2" if pnl >= 0 else "\U0001F534"
             pnl_sign = "+" if pnl >= 0 else ""
 
+            # Calculate portfolio balance
+            initial_capital = 100_000.0
+            balance = initial_capital + pnl
+            return_pct = (pnl / initial_capital) * 100
+
             win_rate = stats['win_rate']
             if win_rate >= 60:
                 perf_emoji = "\U0001F525"
@@ -652,15 +657,14 @@ Bot is now monitoring the market.
 
             return f"""\U0001F4CA <b>Paper Trading Stats</b>
 
+\U0001F4B0 <b>Balance:</b> ${balance:,.2f}
+{pnl_emoji} <b>P&L:</b> {pnl_sign}${pnl:,.2f} ({pnl_sign}{return_pct:.2f}%)
+
 <b>Total Trades:</b> {stats['total_trades']}
-<b>Open:</b> {stats['open_trades']}
-<b>Closed:</b> {stats['closed_trades']}
+<b>Open:</b> {stats['open_trades']} | <b>Closed:</b> {stats['closed_trades']}
 
-<b>Winners:</b> {stats['winning_trades']}
-<b>Losers:</b> {stats['losing_trades']}
+<b>Winners:</b> {stats['winning_trades']} | <b>Losers:</b> {stats['losing_trades']}
 <b>Win Rate:</b> {win_rate:.1f}% {perf_emoji}
-
-{pnl_emoji} <b>Total P&L:</b> {pnl_sign}${pnl:,.2f}
 
 <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"""
 

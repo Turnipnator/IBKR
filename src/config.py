@@ -76,12 +76,13 @@ class TradingConfig:
     min_signal_strength: float = 0.50   # 50% = 2 of 4 indicators (was 75%)
     volume_multiplier: float = 1.0      # Require at least average volume
     require_bullish_trend: bool = True  # Only trade BULLISH trends
+    use_hourly_confirmation: bool = True  # Check 1H trend aligns with 5-min entry
 
     # Anti-churning protections
     cooldown_minutes: int = 20          # Cooldown after stop loss hit
     max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
     max_daily_loss: float = 5000.0      # Stop trading if daily loss exceeds this
-    max_open_positions: int = 2         # Max 2 positions (was 3) - focused deployment
+    max_open_positions: int = 4         # Max 4 positions for diversification
 
     # Scalping-specific settings
     bar_size: str = "5 mins"       # 5-minute candles for scalping
