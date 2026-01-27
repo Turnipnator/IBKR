@@ -82,7 +82,7 @@ class TradingConfig:
     # Anti-churning protections
     cooldown_minutes: int = 20          # Cooldown after stop loss hit
     max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
-    max_daily_loss: float = 5000.0      # Stop trading if daily loss exceeds this
+    max_daily_loss: float = 50000.0     # Stop trading if daily loss exceeds this (high for paper testing)
     max_open_positions: int = 4         # Max 4 positions for diversification
 
     # Scalping-specific settings
