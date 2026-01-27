@@ -237,20 +237,33 @@ class DecisionEngine:
             )
             analyzer.calculate_all()
 
-            # Check BULLISH trend filter (from Binance winning strategy)
+            # Detect 5-min trend
+            trend = analyzer.detect_trend()
+            enable_shorting = getattr(self.config, 'enable_shorting', False)
             require_bullish = getattr(self.config, 'require_bullish_trend', True)
-            if require_bullish:
-                trend = analyzer.detect_trend()
-                if trend != 'BULLISH':
-                    logger.info(f"  {symbol}: Skipped - trend is {trend} (need BULLISH)")
-                    return None
+
+            # Determine trade direction based on trend
+            trade_direction = None  # 'LONG', 'SHORT', or None
+
+            if trend == 'BULLISH':
+                trade_direction = 'LONG'
+            elif trend == 'BEARISH' and enable_shorting:
+                trade_direction = 'SHORT'
+            elif require_bullish:
+                logger.info(f"  {symbol}: Skipped - trend is {trend} (need BULLISH for long)")
+                return None
+
+            if trade_direction is None:
+                logger.info(f"  {symbol}: Skipped - trend is {trend} (no trade direction)")
+                return None
 
             # Multi-timeframe confirmation: check 1H trend aligns with 5-min
             use_hourly = getattr(self.config, 'use_hourly_confirmation', False)
             if use_hourly:
                 hourly_trend = self._check_hourly_trend(symbol)
-                if hourly_trend != 'BULLISH':
-                    logger.info(f"  {symbol}: Skipped - 1H trend is {hourly_trend} (need BULLISH)")
+                required_trend = 'BULLISH' if trade_direction == 'LONG' else 'BEARISH'
+                if hourly_trend != required_trend:
+                    logger.info(f"  {symbol}: Skipped - 1H trend is {hourly_trend} (need {required_trend} for {trade_direction})")
                     return None
 
             # Check volume confirmation (from Binance winning strategy)
@@ -263,43 +276,51 @@ class DecisionEngine:
             # Generate signal
             signal = analyzer.generate_signal(symbol)
 
-            # Use momentum score if available
+            # Use momentum score if available (for shorts, we want low momentum)
             momentum_score = analyzer.get_momentum_score()
-            if momentum_score < 0.5:
-                logger.info(f"  {symbol}: Skipped - momentum {momentum_score:.0%} (need 50%+)")
+            if trade_direction == 'LONG' and momentum_score < 0.5:
+                logger.info(f"  {symbol}: Skipped - momentum {momentum_score:.0%} (need 50%+ for LONG)")
+                return None
+            elif trade_direction == 'SHORT' and momentum_score > 0.5:
+                logger.info(f"  {symbol}: Skipped - momentum {momentum_score:.0%} (need <50% for SHORT)")
                 return None
 
             # Get current price
             current_price = float(df['close'].iloc[-1])
 
-            # RSI filter - block BUY signals when overbought
+            # RSI filter
             rsi_value = signal.indicators.get('rsi')
-            if signal.action == 'BUY' and rsi_value and rsi_value > self.config.rsi_overbought:
+            if trade_direction == 'LONG' and rsi_value and rsi_value > self.config.rsi_overbought:
                 logger.info(f"  {symbol}: Skipped - RSI overbought ({rsi_value:.1f} > {self.config.rsi_overbought})")
+                return None
+            elif trade_direction == 'SHORT' and rsi_value and rsi_value < self.config.rsi_oversold:
+                logger.info(f"  {symbol}: Skipped - RSI oversold ({rsi_value:.1f} < {self.config.rsi_oversold})")
                 return None
 
             # Check existing position
             existing_position = self.position_manager.get_position_quantity(symbol)
 
-            # Determine decision
-            if signal.action == 'BUY' and existing_position == 0:
+            # Determine decision based on direction
+            if trade_direction == 'LONG' and existing_position == 0:
                 decision = TradeDecision.BUY
                 position_size = self.position_manager.calculate_position_size(
                     symbol, current_price, self.config.max_position_pct
                 )
-                # Calculate stop-loss and take-profit
+                # Long: SL below entry, TP above entry
                 stop_loss = round(current_price * (1 - self.config.stop_loss_pct), 2)
                 take_profit = round(current_price * (1 + self.config.take_profit_pct), 2)
 
-            elif signal.action == 'SELL' and existing_position > 0:
-                decision = TradeDecision.CLOSE
-                position_size = existing_position
-                stop_loss = None
-                take_profit = None
+            elif trade_direction == 'SHORT' and existing_position == 0:
+                decision = TradeDecision.SELL  # SELL to open short
+                position_size = self.position_manager.calculate_position_size(
+                    symbol, current_price, self.config.max_position_pct
+                )
+                # Short: SL above entry, TP below entry
+                stop_loss = round(current_price * (1 + self.config.stop_loss_pct), 2)
+                take_profit = round(current_price * (1 - self.config.take_profit_pct), 2)
 
-            elif existing_position > 0:
-                # Check if we should close based on stop-loss logic
-                # (In production, this would check against entry price)
+            elif existing_position != 0:
+                # Already have a position - hold for now (SL/TP handled by bot.py)
                 decision = TradeDecision.HOLD
                 position_size = 0
                 stop_loss = None

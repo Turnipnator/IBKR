@@ -134,11 +134,24 @@ class TradingBot:
                 logger.warning(f"Could not get price for {symbol}: {e}")
                 continue
 
-            # Check stop loss (for BUY trades, price drops below SL)
-            if stop_loss and current_price <= stop_loss:
+            # Determine if this is a long (BUY) or short (SELL) position
+            is_long = trade['action'] == 'BUY'
+
+            # Check stop loss
+            # Long: SL hit when price drops BELOW stop_loss
+            # Short: SL hit when price rises ABOVE stop_loss
+            sl_hit = False
+            if stop_loss:
+                if is_long and current_price <= stop_loss:
+                    sl_hit = True
+                elif not is_long and current_price >= stop_loss:
+                    sl_hit = True
+
+            if sl_hit:
                 result = self.db.close_paper_trade(trade_id, current_price, "CLOSED_SL")
                 closed_count += 1
-                logger.info(f"Paper trade #{trade_id} {symbol} hit STOP LOSS @ ${current_price:.2f}")
+                direction = "LONG" if is_long else "SHORT"
+                logger.info(f"Paper trade #{trade_id} {symbol} ({direction}) hit STOP LOSS @ ${current_price:.2f}")
 
                 # SET COOLDOWN after stop loss (anti-churning from Binance strategy)
                 cooldown_mins = getattr(self.engine.config, 'cooldown_minutes', 20)
@@ -158,11 +171,21 @@ class TradingBot:
                         exit_reason="CLOSED_SL",
                     )
 
-            # Check take profit (for BUY trades, price rises above TP)
-            elif take_profit and current_price >= take_profit:
+            # Check take profit
+            # Long: TP hit when price rises ABOVE take_profit
+            # Short: TP hit when price drops BELOW take_profit
+            tp_hit = False
+            if take_profit and not sl_hit:
+                if is_long and current_price >= take_profit:
+                    tp_hit = True
+                elif not is_long and current_price <= take_profit:
+                    tp_hit = True
+
+            if tp_hit:
                 result = self.db.close_paper_trade(trade_id, current_price, "CLOSED_TP")
                 closed_count += 1
-                logger.info(f"Paper trade #{trade_id} {symbol} hit TAKE PROFIT @ ${current_price:.2f}")
+                direction = "LONG" if is_long else "SHORT"
+                logger.info(f"Paper trade #{trade_id} {symbol} ({direction}) hit TAKE PROFIT @ ${current_price:.2f}")
 
                 if self.notifier and self.notifier.enabled:
                     self.notifier.notify_paper_trade_closed(
