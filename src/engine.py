@@ -56,6 +56,7 @@ class EngineState:
     opportunities: list[TradeOpportunity] = field(default_factory=list)
     market_ok: bool = True
     market_reason: str = ""
+    market_trend: str = "SIDEWAYS"  # SPY trend: BULLISH, BEARISH, or SIDEWAYS
 
 
 class DecisionEngine:
@@ -257,6 +258,18 @@ class DecisionEngine:
                 logger.info(f"  {symbol}: Skipped - trend is {trend} (no trade direction)")
                 return None
 
+            # SPY market filter: only trade in direction of overall market
+            market_trend = self.state.market_trend
+            if market_trend == 'SIDEWAYS':
+                logger.info(f"  {symbol}: Skipped - SPY is SIDEWAYS (no trades in choppy market)")
+                return None
+            elif market_trend == 'BULLISH' and trade_direction == 'SHORT':
+                logger.info(f"  {symbol}: Skipped - SPY is BULLISH (no shorts in bull market)")
+                return None
+            elif market_trend == 'BEARISH' and trade_direction == 'LONG':
+                logger.info(f"  {symbol}: Skipped - SPY is BEARISH (no longs in bear market)")
+                return None
+
             # Multi-timeframe confirmation: check 1H trend aligns with 5-min
             use_hourly = getattr(self.config, 'use_hourly_confirmation', False)
             if use_hourly:
@@ -351,13 +364,16 @@ class DecisionEngine:
             self.state.errors.append(f"{symbol}: {str(e)}")
             return None
 
-    def _check_market_condition(self) -> tuple[bool, str]:
+    def _check_market_condition(self) -> tuple[str, str]:
         """
         Check overall market condition using SPY as a proxy.
-        Only trade when the market is bullish.
+        Returns trend to determine allowed trade directions:
+        - BULLISH: allow LONG trades only
+        - BEARISH: allow SHORT trades only
+        - SIDEWAYS: skip all trades
 
         Returns:
-            Tuple of (is_bullish, reason)
+            Tuple of (trend, reason)
         """
         try:
             logger.info("Checking market condition (SPY)...")
@@ -366,7 +382,7 @@ class DecisionEngine:
 
             if df is None or df.empty or len(df) < 50:
                 logger.warning("Could not fetch SPY data for market check")
-                return (True, "SPY data unavailable - proceeding with caution")
+                return ("SIDEWAYS", "SPY data unavailable - skipping trades")
 
             analyzer = TechnicalAnalyzer(
                 df,
@@ -383,15 +399,15 @@ class DecisionEngine:
             spy_price = latest['close']
 
             if trend == 'BULLISH':
-                return (True, f"SPY ${spy_price:.2f} - BULLISH")
+                return (trend, f"SPY ${spy_price:.2f} - BULLISH (longs allowed)")
             elif trend == 'BEARISH':
-                return (False, f"SPY ${spy_price:.2f} - BEARISH (market weak, skipping trades)")
+                return (trend, f"SPY ${spy_price:.2f} - BEARISH (shorts allowed)")
             else:
-                return (False, f"SPY ${spy_price:.2f} - SIDEWAYS (choppy market, skipping trades)")
+                return (trend, f"SPY ${spy_price:.2f} - SIDEWAYS (no trades)")
 
         except Exception as e:
             logger.error(f"Error checking market condition: {e}")
-            return (True, f"Market check failed: {e} - proceeding with caution")
+            return ("SIDEWAYS", f"Market check failed: {e} - skipping trades")
 
     def _check_hourly_trend(self, symbol: str) -> str:
         """
@@ -446,8 +462,9 @@ class DecisionEngine:
         self.state = EngineState(last_run=datetime.now())
 
         # Check market condition first (SPY filter)
-        market_ok, market_reason = self._check_market_condition()
-        self.state.market_ok = market_ok
+        market_trend, market_reason = self._check_market_condition()
+        self.state.market_trend = market_trend
+        self.state.market_ok = market_trend != 'SIDEWAYS'  # For backwards compat
         self.state.market_reason = market_reason
         logger.info(f"Market condition: {market_reason}")
 
