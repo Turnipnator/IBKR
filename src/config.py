@@ -79,6 +79,11 @@ class TradingConfig:
     use_hourly_confirmation: bool = True  # Check 1H trend aligns with 5-min entry
     enable_shorting: bool = True        # Allow SHORT positions on BEARISH trends
 
+    # Trailing stop - lock in profits once trade moves in your favour
+    use_trailing_stop: bool = True           # Enable trailing stop loss
+    trailing_activation_pct: float = 0.01    # Activate after 1% in profit
+    trailing_stop_pct: float = 0.015         # Trail 1.5% from best price
+
     # Anti-churning protections
     cooldown_minutes: int = 20          # Cooldown after stop loss hit
     max_trades_per_symbol_day: int = 3  # Max trades per symbol per day

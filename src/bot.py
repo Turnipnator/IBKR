@@ -137,6 +137,51 @@ class TradingBot:
             # Determine if this is a long (BUY) or short (SELL) position
             is_long = trade['action'] == 'BUY'
 
+            # Trailing stop logic: lock in profits as price moves favourably
+            use_trailing = getattr(self.engine.config, 'use_trailing_stop', False)
+            if use_trailing and stop_loss:
+                activation_pct = getattr(self.engine.config, 'trailing_activation_pct', 0.01)
+                trail_pct = getattr(self.engine.config, 'trailing_stop_pct', 0.015)
+
+                # Get or initialise best_price (defaults to entry if not yet tracked)
+                best_price = trade.get('best_price') or entry_price
+
+                # Update best_price if current price is more favourable
+                if is_long:
+                    best_price = max(best_price, current_price)
+                else:
+                    best_price = min(best_price, current_price)
+
+                # Check if profit threshold met to activate trailing
+                if is_long:
+                    profit_pct = (best_price - entry_price) / entry_price
+                else:
+                    profit_pct = (entry_price - best_price) / entry_price
+
+                if profit_pct >= activation_pct:
+                    # Calculate new trailing stop
+                    if is_long:
+                        new_sl = round(best_price * (1 - trail_pct), 2)
+                        # Only tighten — never loosen the stop
+                        if new_sl > stop_loss:
+                            logger.info(f"  #{trade_id} {symbol}: Trailing stop ${stop_loss:.2f} -> ${new_sl:.2f} (best: ${best_price:.2f})")
+                            stop_loss = new_sl
+                            self.db.update_paper_trade_stop(trade_id, new_sl, best_price)
+                        else:
+                            self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
+                    else:
+                        new_sl = round(best_price * (1 + trail_pct), 2)
+                        # Only tighten — for shorts, tighter means lower
+                        if new_sl < stop_loss:
+                            logger.info(f"  #{trade_id} {symbol}: Trailing stop ${stop_loss:.2f} -> ${new_sl:.2f} (best: ${best_price:.2f})")
+                            stop_loss = new_sl
+                            self.db.update_paper_trade_stop(trade_id, new_sl, best_price)
+                        else:
+                            self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
+                else:
+                    # Not yet activated — just track the best price
+                    self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
+
             # Check stop loss
             # Long: SL hit when price drops BELOW stop_loss
             # Short: SL hit when price rises ABOVE stop_loss

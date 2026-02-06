@@ -126,6 +126,14 @@ class Database:
                 );
             """)
             conn.commit()
+
+            # Migration: add best_price column for trailing stops
+            try:
+                conn.execute("ALTER TABLE paper_trades ADD COLUMN best_price REAL")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
+
             logger.info(f"Database initialized at {self.db_path}")
         finally:
             conn.close()
@@ -423,6 +431,19 @@ class Database:
 
             logger.info(f"Closed paper trade #{trade_id}: {status} @ ${exit_price:.2f} (P&L: ${pnl_amount:.2f} / {pnl_percent:.1f}%)")
             return trade
+        finally:
+            conn.close()
+
+    def update_paper_trade_stop(self, trade_id: int, new_stop_loss: float, best_price: float):
+        """Update trailing stop loss and best price for an open paper trade."""
+        conn = self._get_connection()
+        try:
+            conn.execute("""
+                UPDATE paper_trades
+                SET stop_loss = ?, best_price = ?
+                WHERE id = ? AND status = 'OPEN'
+            """, (new_stop_loss, best_price, trade_id))
+            conn.commit()
         finally:
             conn.close()
 
