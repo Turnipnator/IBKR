@@ -418,15 +418,16 @@ class DecisionEngine:
             'BULLISH', 'BEARISH', or 'SIDEWAYS'
         """
         try:
-            # Fetch 1-hour bars (need more history for EMAs)
+            # Fetch 1-hour bars - need 20 days for EMA50 to have enough data
+            # 20 trading days × ~7 hours = ~140 bars
             df = self.fetcher.get_historical_data(
                 symbol,
-                duration="5 D",  # 5 days of hourly data
+                duration="20 D",
                 bar_size="1 hour"
             )
 
-            if df is None or df.empty or len(df) < 50:
-                logger.debug(f"{symbol}: Insufficient 1H data, defaulting to SIDEWAYS")
+            if df is None or df.empty or len(df) < 55:
+                logger.debug(f"{symbol}: Insufficient 1H data ({len(df) if df is not None else 0} bars), defaulting to SIDEWAYS")
                 return 'SIDEWAYS'
 
             analyzer = TechnicalAnalyzer(
