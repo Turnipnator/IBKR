@@ -378,6 +378,16 @@ class TradingBot:
                     logger.info(f"  Skipping {opp.symbol} - max open positions ({trading_config.max_open_positions}) reached")
                     continue
 
+                # Check per-sector trade limit
+                max_per_sector = getattr(trading_config, 'max_trades_per_sector', 2)
+                sector = self.engine._get_sector(opp.symbol)
+                if sector and open_trades:
+                    sector_symbols = trading_config.symbols.get(sector, [])
+                    sector_open = sum(1 for t in open_trades if t['symbol'] in sector_symbols)
+                    if sector_open >= max_per_sector:
+                        logger.info(f"  Skipping {opp.symbol} - sector '{sector}' already has {sector_open} open trades (max {max_per_sector})")
+                        continue
+
                 # Only open paper trade if we don't already have one for this symbol
                 if not self.db.has_open_paper_trade(opp.symbol):
                     trade_id = self.db.save_paper_trade(

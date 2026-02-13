@@ -81,7 +81,7 @@ class TradingConfig:
 
     # Trailing stop - lock in profits once trade moves in your favour
     use_trailing_stop: bool = True           # Enable trailing stop loss
-    trailing_activation_pct: float = 0.01    # Activate after 1% in profit
+    trailing_activation_pct: float = 0.005   # Activate after 0.5% in profit
     trailing_stop_pct: float = 0.015         # Trail 1.5% from best price
 
     # Anti-churning protections
@@ -89,6 +89,7 @@ class TradingConfig:
     max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
     max_daily_loss: float = 50000.0     # Stop trading if daily loss exceeds this (high for paper testing)
     max_open_positions: int = 4         # Max 4 positions for diversification
+    max_trades_per_sector: int = 2      # Max 2 open trades per sector (avoid concentration)
 
     # Scalping-specific settings
     bar_size: str = "5 mins"       # 5-minute candles for scalping
