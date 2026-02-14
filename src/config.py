@@ -55,7 +55,7 @@ class TradingConfig:
     symbols: dict = field(default_factory=lambda: {
         "precious_metals": ["GLD", "SLV", "PPLT", "PALL"],  # Gold, Silver, Platinum, Palladium
         "ai": ["NVDA", "AMD", "GOOGL", "MSFT"],
-        "tech": ["AAPL", "TSLA", "META", "AMZN"],
+        "tech": ["TSLA", "META", "AMZN"],
     })
 
     # Risk management - OPTIMIZED 1:1 ratio
@@ -73,7 +73,7 @@ class TradingConfig:
     rsi_oversold: int = 30
 
     # Entry filters - OPTIMIZED for more high-quality trades
-    min_signal_strength: float = 0.50   # 50% = 2 of 4 indicators (was 75%)
+    min_signal_strength: float = 0.70   # 70% = 3 of 4 indicators minimum
     volume_multiplier: float = 1.0      # Require at least average volume
     require_bullish_trend: bool = True  # Only trade BULLISH trends (for longs)
     use_hourly_confirmation: bool = True  # Check 1H trend aligns with 5-min entry
