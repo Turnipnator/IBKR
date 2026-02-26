@@ -51,9 +51,8 @@ class TradingConfig:
 
     Backtest results: +1.26% monthly, 71% win rate, Sharpe 0.85
     """
-    # Asset universe - focus on liquid, volatile stocks
+    # Asset universe - focus on liquid tech/AI stocks (precious metals removed: poor edge, high gap risk)
     symbols: dict = field(default_factory=lambda: {
-        "precious_metals": ["GLD", "SLV", "PPLT", "PALL"],  # Gold, Silver, Platinum, Palladium
         "ai": ["NVDA", "AMD", "GOOGL", "MSFT"],
         "tech": ["TSLA", "META", "AMZN"],
     })
