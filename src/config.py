@@ -51,10 +51,11 @@ class TradingConfig:
 
     Backtest results: +1.26% monthly, 71% win rate, Sharpe 0.85
     """
-    # Asset universe - focus on liquid tech/AI stocks (precious metals removed: poor edge, high gap risk)
+    # Asset universe - liquid large-caps with good momentum characteristics
     symbols: dict = field(default_factory=lambda: {
-        "ai": ["NVDA", "AMD", "GOOGL", "MSFT"],
+        "ai": ["NVDA", "AMD", "GOOGL", "MSFT", "AVGO", "TSM"],
         "tech": ["TSLA", "META", "AMZN"],
+        "diversified": ["V", "XOM", "NVO"],
     })
 
     # Risk management - OPTIMIZED 1:1 ratio
