@@ -372,6 +372,16 @@ class TradingBot:
                     logger.info(f"  Skipping {opp.symbol} - {self.engine.state.market_reason}")
                     continue
 
+                # Check late-entry cutoff - no new trades near market close
+                cutoff_mins = getattr(trading_config, 'last_entry_minutes_before_close', 0)
+                if cutoff_mins > 0:
+                    now_et = datetime.now(self.US_EASTERN)
+                    close_dt = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+                    mins_to_close = (close_dt - now_et).total_seconds() / 60
+                    if 0 < mins_to_close <= cutoff_mins:
+                        logger.info(f"  Skipping {opp.symbol} - {int(mins_to_close)}min to close (cutoff {cutoff_mins}min)")
+                        continue
+
                 # Check max open positions limit
                 open_trades = self.db.get_open_paper_trades()
                 if len(open_trades) >= trading_config.max_open_positions:

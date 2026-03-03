@@ -81,8 +81,11 @@ class TradingConfig:
 
     # Trailing stop - lock in profits once trade moves in your favour
     use_trailing_stop: bool = True           # Enable trailing stop loss
-    trailing_activation_pct: float = 0.005   # Activate after 0.5% in profit
-    trailing_stop_pct: float = 0.015         # Trail 1.5% from best price
+    trailing_activation_pct: float = 0.0025  # Activate after 0.25% in profit
+    trailing_stop_pct: float = 0.005         # Trail 0.5% from best price
+
+    # Entry timing - avoid forced overnight holds from late entries
+    last_entry_minutes_before_close: int = 60  # No new trades in final 60 min (after 3pm ET)
 
     # Anti-churning protections
     cooldown_minutes: int = 20          # Cooldown after stop loss hit
