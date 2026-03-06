@@ -84,7 +84,8 @@ class TradingConfig:
     trailing_activation_pct: float = 0.0025  # Activate after 0.25% in profit
     trailing_stop_pct: float = 0.005         # Trail 0.5% from best price
 
-    # Entry timing - avoid forced overnight holds from late entries
+    # Entry timing - avoid noisy open and forced overnight holds
+    first_entry_minutes_after_open: int = 15   # No new trades in first 15 min (before 9:45am ET)
     last_entry_minutes_before_close: int = 60  # No new trades in final 60 min (after 3pm ET)
 
     # Anti-churning protections

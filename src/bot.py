@@ -372,6 +372,16 @@ class TradingBot:
                     logger.info(f"  Skipping {opp.symbol} - {self.engine.state.market_reason}")
                     continue
 
+                # Check early-open cooldown - no new trades in first N minutes
+                open_delay = getattr(trading_config, 'first_entry_minutes_after_open', 0)
+                if open_delay > 0:
+                    now_et = datetime.now(self.US_EASTERN)
+                    open_dt = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                    mins_since_open = (now_et - open_dt).total_seconds() / 60
+                    if 0 <= mins_since_open < open_delay:
+                        logger.info(f"  Skipping {opp.symbol} - {int(open_delay - mins_since_open)}min left in open cooldown ({open_delay}min)")
+                        continue
+
                 # Check late-entry cutoff - no new trades near market close
                 cutoff_mins = getattr(trading_config, 'last_entry_minutes_before_close', 0)
                 if cutoff_mins > 0:
