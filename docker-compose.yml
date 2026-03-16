@@ -54,5 +54,25 @@ services:
       - ./logs:/app/logs
     command: ["python", "-m", "src.bot", "--interval", "5"]
 
+  # Daily Instrument Screener - runs at 14:00 UTC Mon-Fri
+  screener:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: screener
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      WATCHLIST_PATH: /app/data/watchlist.json
+      DATA_DIR: /app/data
+      LOG_DIR: /app/logs
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./screener-cron.sh:/app/screener-cron.sh:ro
+    command: ["bash", "/app/screener-cron.sh"]
+
 volumes:
   ib-gateway-data:

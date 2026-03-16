@@ -3,6 +3,7 @@ Configuration settings for the IBKR Trading Bot.
 Uses environment variables with sensible defaults for development.
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,33 @@ try:
         load_dotenv(env_path)
 except ImportError:
     pass  # dotenv not installed, use environment variables directly
+
+
+_DEFAULT_SYMBOLS = {
+    "ai": ["NVDA", "AMD", "GOOGL", "MSFT", "AVGO", "TSM"],
+    "tech": ["TSLA", "META", "AMZN"],
+    "diversified": ["V", "XOM", "NVO"],
+}
+
+_WATCHLIST_PATH = Path(os.getenv("WATCHLIST_PATH", "data/watchlist.json"))
+
+
+def _load_watchlist() -> dict:
+    """Load symbols from watchlist.json if it exists, otherwise use defaults."""
+    try:
+        if _WATCHLIST_PATH.exists():
+            with open(_WATCHLIST_PATH) as f:
+                data = json.load(f)
+            symbols = data.get("symbols", {})
+            if symbols and isinstance(symbols, dict):
+                # Validate structure: all values must be lists of strings
+                for sector, tickers in symbols.items():
+                    if not isinstance(tickers, list) or not all(isinstance(t, str) for t in tickers):
+                        raise ValueError(f"Invalid watchlist format for sector '{sector}'")
+                return symbols
+    except Exception as e:
+        print(f"Warning: Failed to load watchlist from {_WATCHLIST_PATH}: {e}. Using defaults.")
+    return dict(_DEFAULT_SYMBOLS)
 
 
 @dataclass
@@ -51,12 +79,8 @@ class TradingConfig:
 
     Backtest results: +1.26% monthly, 71% win rate, Sharpe 0.85
     """
-    # Asset universe - liquid large-caps with good momentum characteristics
-    symbols: dict = field(default_factory=lambda: {
-        "ai": ["NVDA", "AMD", "GOOGL", "MSFT", "AVGO", "TSM"],
-        "tech": ["TSLA", "META", "AMZN"],
-        "diversified": ["V", "XOM", "NVO"],
-    })
+    # Asset universe - loaded from watchlist.json if present, otherwise defaults
+    symbols: dict = field(default_factory=lambda: _load_watchlist())
 
     # Risk management - OPTIMIZED 1:1 ratio
     max_position_pct: float = 0.10  # Max 10% of portfolio per position
