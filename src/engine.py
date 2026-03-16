@@ -96,7 +96,9 @@ class DecisionEngine:
         self.state = EngineState()
 
     def _get_all_symbols(self) -> list[str]:
-        """Get all symbols from trading universe."""
+        """Get all symbols from trading universe (reloads watchlist each cycle)."""
+        from .config import _load_watchlist
+        self.config.symbols = _load_watchlist()
         symbols = []
         for sector_symbols in self.config.symbols.values():
             symbols.extend(sector_symbols)
