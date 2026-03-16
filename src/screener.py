@@ -157,11 +157,16 @@ def fetch_screening_data(symbols: list[str]) -> dict[str, dict]:
                 logger.warning(f"{symbol}: insufficient historical data ({len(hist) if hist is not None else 0} bars)")
                 continue
 
-            # Average volume (20-day)
-            avg_volume = hist["Volume"].tail(20).mean()
-            current_volume = hist["Volume"].iloc[-1]
+            # Use previous completed day's volume (last bar may be today's partial session)
+            # Average over days excluding the most recent (which may be incomplete)
+            if len(hist) >= 3:
+                avg_volume = hist["Volume"].iloc[:-1].tail(20).mean()
+                current_volume = hist["Volume"].iloc[-2]  # Last complete day
+            else:
+                avg_volume = hist["Volume"].mean()
+                current_volume = hist["Volume"].iloc[-1]
 
-            # Relative volume
+            # Relative volume (last complete day vs 20-day average)
             rel_volume = (current_volume / avg_volume) if avg_volume > 0 else 0
 
             # ATR% (14-day ATR / price)
