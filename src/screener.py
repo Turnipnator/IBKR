@@ -346,7 +346,7 @@ def backup_watchlist() -> bool:
         cutoff = datetime.now(tz=timezone.utc) - timedelta(days=14)
         for f in BACKUP_DIR.glob("watchlist_*.json"):
             try:
-                file_date = datetime.strptime(f.stem.replace("watchlist_", ""), "%Y%m%d_%H%M")
+                file_date = datetime.strptime(f.stem.replace("watchlist_", ""), "%Y%m%d_%H%M").replace(tzinfo=timezone.utc)
                 if file_date < cutoff:
                     f.unlink()
                     logger.info(f"Cleaned old backup: {f.name}")
