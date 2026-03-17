@@ -82,10 +82,10 @@ class TradingConfig:
     # Asset universe - loaded from watchlist.json if present, otherwise defaults
     symbols: dict = field(default_factory=lambda: _load_watchlist())
 
-    # Risk management - OPTIMIZED 1:1 ratio
+    # Risk management - TIGHT 1:1 ratio for scalping
     max_position_pct: float = 0.10  # Max 10% of portfolio per position
-    stop_loss_pct: float = 0.02     # 2% stop loss (1:1 with TP)
-    take_profit_pct: float = 0.02   # 2% take profit (1:1 with SL)
+    stop_loss_pct: float = 0.01     # 1% stop loss (1:1 with TP)
+    take_profit_pct: float = 0.01   # 1% take profit (1:1 with SL)
     max_sector_pct: float = 0.40    # Max 40% in any sector
 
     # Technical parameters - EMA-based for momentum
