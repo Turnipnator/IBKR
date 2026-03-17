@@ -18,10 +18,13 @@ except ImportError:
     pass  # dotenv not installed, use environment variables directly
 
 
-_DEFAULT_SYMBOLS = {
-    "ai": ["NVDA", "AMD", "GOOGL", "MSFT", "AVGO", "TSM"],
-    "tech": ["TSLA", "META", "AMZN"],
-    "diversified": ["V", "XOM", "NVO"],
+# Default universe: 30 liquid ETFs across 5 uncorrelated asset classes
+_DEFAULT_UNIVERSE = {
+    "equity": ["SPY", "QQQ", "IWM", "EFA", "EEM", "VGK", "EWJ", "FXI"],
+    "bond": ["TLT", "IEF", "SHY", "LQD", "HYG", "EMB"],
+    "commodity": ["GLD", "SLV", "USO", "UNG", "DBA", "DBB", "PDBC", "CPER"],
+    "fx": ["UUP", "FXE", "FXY", "FXB"],
+    "alt": ["VNQ", "BITO", "DBC", "TIP"],
 }
 
 _WATCHLIST_PATH = Path(os.getenv("WATCHLIST_PATH", "data/watchlist.json"))
@@ -42,7 +45,7 @@ def _load_watchlist() -> dict:
                 return symbols
     except Exception as e:
         print(f"Warning: Failed to load watchlist from {_WATCHLIST_PATH}: {e}. Using defaults.")
-    return dict(_DEFAULT_SYMBOLS)
+    return dict(_DEFAULT_UNIVERSE)
 
 
 @dataclass
@@ -67,66 +70,54 @@ class IBKRConfig:
 
 @dataclass
 class TradingConfig:
-    """Trading parameters - configured for MOMENTUM SCALPING strategy.
+    """Trading parameters - TREND FOLLOWING / MOMENTUM strategy.
 
-    Optimized via backtesting (Jan 2026):
-    - 1:1 TP/SL ratio (2%/2%) for balanced risk/reward
-    - 50% signal strength (2 of 4 indicators) for more trades
-    - Max 2 positions for focused capital deployment
-    - BULLISH trend requirement (SPY + stock)
-    - Volume confirmation (1.0x average)
-    - Cooldown after losses (20 min)
-
-    Backtest results: +1.26% monthly, 71% win rate, Sharpe 0.85
+    Based on academic research (Moskowitz, Ooi, Pedersen 2012):
+    - Time-series momentum (TSMOM) across multiple lookback windows
+    - Cross-sectional momentum (CSMOM) for relative strength ranking
+    - Volatility-scaled (ATR-based) position sizing
+    - Diversified universe of 30 ETFs across 5 asset classes
+    - Daily rebalancing with ATR trailing stops
     """
     # Asset universe - loaded from watchlist.json if present, otherwise defaults
     symbols: dict = field(default_factory=lambda: _load_watchlist())
 
-    # Risk management - TIGHT 1:1 ratio for scalping
-    max_position_pct: float = 0.10  # Max 10% of portfolio per position
-    stop_loss_pct: float = 0.01     # 1% stop loss (1:1 with TP)
-    take_profit_pct: float = 0.01   # 1% take profit (1:1 with SL)
-    max_sector_pct: float = 0.40    # Max 40% in any sector
+    # Signal parameters
+    lookback_short: int = 21       # 1-month lookback (trading days)
+    lookback_medium: int = 63      # 3-month lookback
+    lookback_long: int = 252       # 12-month lookback
+    tsmom_weight: float = 0.6      # Weight for time-series momentum
+    csmom_weight: float = 0.4      # Weight for cross-sectional momentum
+    signal_threshold: float = 0.3  # Min |signal| to trade (0.3 = 2 of 3 timeframes agree)
 
-    # Technical parameters - EMA-based for momentum
-    ema_fast: int = 9              # Fast EMA
-    ema_slow: int = 21             # Slow EMA
-    ema_trend: int = 50            # Trend EMA (for direction filter)
-    rsi_period: int = 7            # Shorter RSI for faster signals
-    rsi_overbought: int = 70
-    rsi_oversold: int = 30
+    # Position sizing - volatility-scaled (inverse ATR)
+    atr_period: int = 20           # ATR lookback for volatility
+    atr_stop_multiplier: float = 3.0  # Trailing stop = 3x ATR from peak
+    risk_budget: float = 0.20      # Target 20% annualised portfolio volatility
+    max_position_pct: float = 0.05 # Max 5% of equity per position
+    max_asset_class_pct: float = 0.25  # Max 25% in any asset class
+    max_gross_exposure: float = 1.5    # Max 150% gross exposure
 
-    # Entry filters - OPTIMIZED for more high-quality trades
-    min_signal_strength: float = 0.70   # 70% = 3 of 4 indicators minimum
-    volume_multiplier: float = 1.0      # Require at least average volume
-    require_bullish_trend: bool = True  # Only trade BULLISH trends (for longs)
-    use_hourly_confirmation: bool = True  # Check 1H trend aligns with 5-min entry
-    enable_shorting: bool = True        # Allow SHORT positions on BEARISH trends
+    # Risk management
+    min_hold_days: int = 5         # Minimum hold period to prevent whipsaws
+    drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
+    drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
+    max_daily_loss: float = 30000.0    # Daily loss limit (3% of $1M)
 
-    # Trailing stop - lock in profits once trade moves in your favour
-    use_trailing_stop: bool = True           # Enable trailing stop loss
-    trailing_activation_pct: float = 0.0025  # Activate after 0.25% in profit
-    trailing_stop_pct: float = 0.005         # Trail 0.5% from best price
+    # Shorting
+    enable_shorting: bool = False   # Start long-only, add shorts later
 
-    # Entry timing - avoid noisy open and forced overnight holds
-    first_entry_minutes_after_open: int = 15   # No new trades in first 15 min (before 9:45am ET)
-    last_entry_minutes_before_close: int = 60  # No new trades in final 60 min (after 3pm ET)
+    # Data parameters
+    bar_size: str = "1 day"        # Daily bars for trend following
+    data_duration: str = "1 Y"     # 1 year of history for lookbacks
 
-    # Anti-churning protections
-    cooldown_minutes: int = 20          # Cooldown after stop loss hit
-    max_trades_per_symbol_day: int = 3  # Max trades per symbol per day
-    max_daily_loss: float = 50000.0     # Stop trading if daily loss exceeds this (high for paper testing)
-    max_open_positions: int = 4         # Max 4 positions for diversification
-    max_trades_per_sector: int = 2      # Max 2 open trades per sector (avoid concentration)
+    # Scheduling
+    rebalance_hour: int = 15       # Rebalance at 3:30 PM ET
+    rebalance_minute: int = 30
+    risk_check_interval_hours: int = 4  # Check trailing stops every 4 hours
 
-    # Scalping-specific settings
-    bar_size: str = "5 mins"       # 5-minute candles for scalping
-    data_duration: str = "2 D"     # 2 days of data (enough for 5-min bars)
-    min_volume: int = 100000       # Minimum volume filter
-
-    # Legacy support (kept for compatibility)
-    sma_fast: int = 9
-    sma_slow: int = 21
+    # Max open positions (all instruments could be active)
+    max_open_positions: int = 30
 
 
 @dataclass

@@ -1,5 +1,5 @@
 """
-SQLite database layer for storing market data and trade history.
+SQLite database layer for storing market data, trade history, and portfolio tracking.
 """
 
 import sqlite3
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class Database:
     """
-    SQLite database manager for market data and trades.
+    SQLite database manager for market data, trades, and portfolio tracking.
 
     Usage:
         db = Database()
@@ -56,7 +56,6 @@ class Database:
                     UNIQUE(symbol, date)
                 );
 
-                -- Index for faster queries
                 CREATE INDEX IF NOT EXISTS idx_ohlcv_symbol_date
                 ON ohlcv(symbol, date);
 
@@ -64,12 +63,12 @@ class Database:
                 CREATE TABLE IF NOT EXISTS trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     symbol TEXT NOT NULL,
-                    action TEXT NOT NULL,  -- BUY, SELL
+                    action TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
                     price REAL NOT NULL,
                     order_id INTEGER,
-                    status TEXT,  -- FILLED, CANCELLED, PENDING
-                    reason TEXT,  -- Why the trade was made
+                    status TEXT,
+                    reason TEXT,
                     executed_at TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
@@ -88,64 +87,73 @@ class Database:
                 CREATE TABLE IF NOT EXISTS paper_trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     symbol TEXT NOT NULL,
-                    action TEXT NOT NULL,  -- BUY or SELL
+                    action TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
                     entry_price REAL NOT NULL,
                     stop_loss REAL,
                     take_profit REAL,
-                    status TEXT DEFAULT 'OPEN',  -- OPEN, CLOSED_TP, CLOSED_SL, CLOSED_MANUAL
+                    status TEXT DEFAULT 'OPEN',
                     exit_price REAL,
                     pnl_amount REAL,
                     pnl_percent REAL,
-                    reasons TEXT,  -- JSON list of reasons
+                    reasons TEXT,
                     entry_time TEXT NOT NULL,
                     exit_time TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- Index for faster queries on open paper trades
                 CREATE INDEX IF NOT EXISTS idx_paper_trades_status
                 ON paper_trades(status);
 
-                -- Symbol cooldowns (anti-churning)
-                CREATE TABLE IF NOT EXISTS symbol_cooldowns (
+                -- Portfolio snapshots for drawdown tracking
+                CREATE TABLE IF NOT EXISTS portfolio_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT NOT NULL UNIQUE,
-                    cooldown_until TEXT NOT NULL,
-                    reason TEXT,
+                    equity REAL NOT NULL,
+                    drawdown REAL NOT NULL DEFAULT 0.0,
+                    peak_equity REAL NOT NULL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- Daily trade counts per symbol
-                CREATE TABLE IF NOT EXISTS daily_trade_counts (
+                -- Daily instrument signals (audit trail)
+                CREATE TABLE IF NOT EXISTS instrument_signals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     symbol TEXT NOT NULL,
-                    trade_date TEXT NOT NULL,
-                    trade_count INTEGER DEFAULT 1,
-                    UNIQUE(symbol, trade_date)
+                    tsmom_score REAL,
+                    csmom_score REAL,
+                    combined_score REAL,
+                    price REAL,
+                    atr_value REAL,
+                    volatility REAL,
+                    signal_date TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_instrument_signals_date
+                ON instrument_signals(signal_date, symbol);
             """)
             conn.commit()
 
-            # Migration: add best_price column for trailing stops
-            try:
-                conn.execute("ALTER TABLE paper_trades ADD COLUMN best_price REAL")
-                conn.commit()
-            except Exception:
-                pass  # Column already exists
+            # Migrations for existing databases
+            for migration_sql in [
+                "ALTER TABLE paper_trades ADD COLUMN best_price REAL",
+                "ALTER TABLE paper_trades ADD COLUMN atr_stop REAL",
+                "ALTER TABLE paper_trades ADD COLUMN min_exit_date TEXT",
+                "ALTER TABLE paper_trades ADD COLUMN signal_score REAL",
+            ]:
+                try:
+                    conn.execute(migration_sql)
+                    conn.commit()
+                except Exception:
+                    pass  # Column already exists
 
             logger.info(f"Database initialized at {self.db_path}")
         finally:
             conn.close()
 
-    def save_ohlcv(self, df: pd.DataFrame, symbol: Optional[str] = None):
-        """
-        Save OHLCV data to database.
+    # ==================== OHLCV Methods ====================
 
-        Args:
-            df: DataFrame with OHLCV columns
-            symbol: Symbol to use (overrides df['symbol'] if present)
-        """
+    def save_ohlcv(self, df: pd.DataFrame, symbol: Optional[str] = None):
+        """Save OHLCV data to database."""
         if df is None or df.empty:
             return
 
@@ -162,78 +170,49 @@ class Database:
                     (symbol, date, open, high, low, close, volume, average, bar_count)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    sym,
-                    date_val,
-                    row.get("open"),
-                    row.get("high"),
-                    row.get("low"),
-                    row.get("close"),
-                    row.get("volume"),
-                    row.get("average"),
-                    row.get("barCount"),
+                    sym, date_val,
+                    row.get("open"), row.get("high"), row.get("low"),
+                    row.get("close"), row.get("volume"),
+                    row.get("average"), row.get("barCount"),
                 ))
-
             conn.commit()
             logger.info(f"Saved {len(df)} bars for {symbol or 'multiple symbols'}")
         finally:
             conn.close()
 
     def load_ohlcv(
-        self,
-        symbol: str,
+        self, symbol: str,
         days: Optional[int] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> pd.DataFrame:
-        """
-        Load OHLCV data from database.
-
-        Args:
-            symbol: Stock ticker
-            days: Number of days to load (from most recent)
-            start_date: Start date (ISO format)
-            end_date: End date (ISO format)
-
-        Returns:
-            DataFrame with OHLCV data
-        """
+        """Load OHLCV data from database."""
         conn = self._get_connection()
         try:
             query = "SELECT * FROM ohlcv WHERE symbol = ?"
             params = [symbol]
-
             if start_date:
                 query += " AND date >= ?"
                 params.append(start_date)
-
             if end_date:
                 query += " AND date <= ?"
                 params.append(end_date)
-
             query += " ORDER BY date DESC"
-
             if days:
                 query += f" LIMIT {days}"
-
             df = pd.read_sql_query(query, conn, params=params)
-
             if not df.empty:
                 df["date"] = pd.to_datetime(df["date"])
                 df = df.sort_values("date").reset_index(drop=True)
-
             return df
-
         finally:
             conn.close()
 
+    # ==================== Trade Methods ====================
+
     def save_trade(
-        self,
-        symbol: str,
-        action: str,
-        quantity: int,
-        price: float,
-        order_id: Optional[int] = None,
-        status: str = "PENDING",
+        self, symbol: str, action: str, quantity: int, price: float,
+        order_id: Optional[int] = None, status: str = "PENDING",
         reason: Optional[str] = None,
     ):
         """Log a trade to the database."""
@@ -243,117 +222,36 @@ class Database:
                 INSERT INTO trades
                 (symbol, action, quantity, price, order_id, status, reason, executed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                symbol,
-                action,
-                quantity,
-                price,
-                order_id,
-                status,
-                reason,
-                datetime.now().isoformat(),
-            ))
+            """, (symbol, action, quantity, price, order_id, status, reason,
+                  datetime.now().isoformat()))
             conn.commit()
-            logger.info(f"Logged trade: {action} {quantity} {symbol} @ {price}")
-        finally:
-            conn.close()
-
-    def get_trades(
-        self,
-        symbol: Optional[str] = None,
-        limit: int = 100,
-    ) -> pd.DataFrame:
-        """Get trade history."""
-        conn = self._get_connection()
-        try:
-            query = "SELECT * FROM trades"
-            params = []
-
-            if symbol:
-                query += " WHERE symbol = ?"
-                params.append(symbol)
-
-            query += " ORDER BY created_at DESC LIMIT ?"
-            params.append(limit)
-
-            return pd.read_sql_query(query, conn, params=params)
-        finally:
-            conn.close()
-
-    def save_account_snapshot(
-        self,
-        net_liquidation: float,
-        total_cash: float,
-        buying_power: float,
-        currency: str = "GBP",
-    ):
-        """Save an account snapshot."""
-        conn = self._get_connection()
-        try:
-            conn.execute("""
-                INSERT INTO account_snapshots
-                (net_liquidation, total_cash, buying_power, currency)
-                VALUES (?, ?, ?, ?)
-            """, (net_liquidation, total_cash, buying_power, currency))
-            conn.commit()
-        finally:
-            conn.close()
-
-    def get_symbols_with_data(self) -> list[str]:
-        """Get list of symbols that have stored data."""
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute("SELECT DISTINCT symbol FROM ohlcv ORDER BY symbol")
-            return [row[0] for row in cursor.fetchall()]
-        finally:
-            conn.close()
-
-    def get_data_range(self, symbol: str) -> tuple[Optional[str], Optional[str]]:
-        """Get the date range of stored data for a symbol."""
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute("""
-                SELECT MIN(date), MAX(date) FROM ohlcv WHERE symbol = ?
-            """, (symbol,))
-            row = cursor.fetchone()
-            return (row[0], row[1]) if row else (None, None)
         finally:
             conn.close()
 
     # ==================== Paper Trade Methods ====================
 
     def save_paper_trade(
-        self,
-        symbol: str,
-        action: str,
-        quantity: int,
-        entry_price: float,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        reasons: Optional[list[str]] = None,
+        self, symbol: str, action: str, quantity: int, entry_price: float,
+        stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
+        reasons: Optional[list[str]] = None, signal_score: Optional[float] = None,
+        min_hold_days: int = 0,
     ) -> int:
-        """
-        Save a new paper trade.
-
-        Returns:
-            The ID of the created paper trade
-        """
+        """Save a new paper trade. Returns the trade ID."""
         import json
+        now = datetime.now()
+        min_exit = (now + timedelta(days=min_hold_days)).isoformat() if min_hold_days > 0 else None
+
         conn = self._get_connection()
         try:
             cursor = conn.execute("""
                 INSERT INTO paper_trades
-                (symbol, action, quantity, entry_price, stop_loss, take_profit, reasons, entry_time, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
+                (symbol, action, quantity, entry_price, stop_loss, take_profit,
+                 reasons, entry_time, status, signal_score, min_exit_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
             """, (
-                symbol,
-                action,
-                quantity,
-                entry_price,
-                stop_loss,
-                take_profit,
+                symbol, action, quantity, entry_price, stop_loss, take_profit,
                 json.dumps(reasons) if reasons else None,
-                datetime.now().isoformat(),
+                now.isoformat(), signal_score, min_exit,
             ))
             conn.commit()
             trade_id = cursor.lastrowid
@@ -367,9 +265,9 @@ class Database:
         import json
         conn = self._get_connection()
         try:
-            cursor = conn.execute("""
-                SELECT * FROM paper_trades WHERE status = 'OPEN' ORDER BY entry_time DESC
-            """)
+            cursor = conn.execute(
+                "SELECT * FROM paper_trades WHERE status = 'OPEN' ORDER BY entry_time DESC"
+            )
             trades = []
             for row in cursor.fetchall():
                 trade = dict(row)
@@ -380,22 +278,11 @@ class Database:
         finally:
             conn.close()
 
-    def close_paper_trade(
-        self,
-        trade_id: int,
-        exit_price: float,
-        status: str,  # CLOSED_TP, CLOSED_SL, CLOSED_MANUAL
-    ) -> dict:
-        """
-        Close a paper trade and calculate P&L.
-
-        Returns:
-            Dict with trade details including P&L
-        """
+    def close_paper_trade(self, trade_id: int, exit_price: float, status: str) -> dict:
+        """Close a paper trade and calculate P&L."""
         import json
         conn = self._get_connection()
         try:
-            # Get the trade
             cursor = conn.execute("SELECT * FROM paper_trades WHERE id = ?", (trade_id,))
             row = cursor.fetchone()
             if not row:
@@ -406,15 +293,13 @@ class Database:
             quantity = trade['quantity']
             action = trade['action']
 
-            # Calculate P&L (for BUY: profit if exit > entry)
             if action == 'BUY':
                 pnl_amount = (exit_price - entry_price) * quantity
                 pnl_percent = ((exit_price - entry_price) / entry_price) * 100
-            else:  # SELL (short)
+            else:
                 pnl_amount = (entry_price - exit_price) * quantity
                 pnl_percent = ((entry_price - exit_price) / entry_price) * 100
 
-            # Update the trade
             conn.execute("""
                 UPDATE paper_trades
                 SET status = ?, exit_price = ?, pnl_amount = ?, pnl_percent = ?, exit_time = ?
@@ -422,14 +307,14 @@ class Database:
             """, (status, exit_price, pnl_amount, pnl_percent, datetime.now().isoformat(), trade_id))
             conn.commit()
 
-            trade['status'] = status
-            trade['exit_price'] = exit_price
-            trade['pnl_amount'] = pnl_amount
-            trade['pnl_percent'] = pnl_percent
+            trade.update({
+                'status': status, 'exit_price': exit_price,
+                'pnl_amount': pnl_amount, 'pnl_percent': pnl_percent,
+            })
             if trade.get('reasons'):
                 trade['reasons'] = json.loads(trade['reasons'])
 
-            logger.info(f"Closed paper trade #{trade_id}: {status} @ ${exit_price:.2f} (P&L: ${pnl_amount:.2f} / {pnl_percent:.1f}%)")
+            logger.info(f"Closed paper trade #{trade_id}: {status} @ ${exit_price:.2f} (P&L: ${pnl_amount:.2f})")
             return trade
         finally:
             conn.close()
@@ -439,11 +324,22 @@ class Database:
         conn = self._get_connection()
         try:
             conn.execute("""
-                UPDATE paper_trades
-                SET stop_loss = ?, best_price = ?
+                UPDATE paper_trades SET stop_loss = ?, best_price = ?
                 WHERE id = ? AND status = 'OPEN'
             """, (new_stop_loss, best_price, trade_id))
             conn.commit()
+        finally:
+            conn.close()
+
+    def has_open_paper_trade(self, symbol: str) -> bool:
+        """Check if there's already an open paper trade for a symbol."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM paper_trades WHERE symbol = ? AND status = 'OPEN'",
+                (symbol,)
+            )
+            return cursor.fetchone()[0] > 0
         finally:
             conn.close()
 
@@ -452,18 +348,11 @@ class Database:
         conn = self._get_connection()
         try:
             stats = {
-                'total_trades': 0,
-                'open_trades': 0,
-                'closed_trades': 0,
-                'winning_trades': 0,
-                'losing_trades': 0,
-                'total_pnl': 0.0,
-                'win_rate': 0.0,
-                'avg_win': 0.0,
-                'avg_loss': 0.0,
+                'total_trades': 0, 'open_trades': 0, 'closed_trades': 0,
+                'winning_trades': 0, 'losing_trades': 0,
+                'total_pnl': 0.0, 'win_rate': 0.0,
+                'avg_win': 0.0, 'avg_loss': 0.0,
             }
-
-            # Count trades
             cursor = conn.execute("SELECT COUNT(*) FROM paper_trades")
             stats['total_trades'] = cursor.fetchone()[0]
 
@@ -473,7 +362,6 @@ class Database:
             cursor = conn.execute("SELECT COUNT(*) FROM paper_trades WHERE status != 'OPEN'")
             stats['closed_trades'] = cursor.fetchone()[0]
 
-            # P&L stats
             cursor = conn.execute("""
                 SELECT COUNT(*), SUM(pnl_amount), AVG(pnl_amount)
                 FROM paper_trades WHERE status != 'OPEN' AND pnl_amount > 0
@@ -500,171 +388,114 @@ class Database:
         finally:
             conn.close()
 
-    def has_open_paper_trade(self, symbol: str) -> bool:
-        """Check if there's already an open paper trade for a symbol."""
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM paper_trades WHERE symbol = ? AND status = 'OPEN'",
-                (symbol,)
-            )
-            return cursor.fetchone()[0] > 0
-        finally:
-            conn.close()
-
-    # ==================== Cooldown & Anti-Churning Methods ====================
-
-    def set_symbol_cooldown(self, symbol: str, minutes: int, reason: str = "stop_loss"):
-        """
-        Set a cooldown period for a symbol after a losing trade.
-
-        Args:
-            symbol: Stock ticker
-            minutes: Cooldown duration in minutes
-            reason: Why cooldown was set (stop_loss, manual, etc.)
-        """
-        from datetime import timedelta
-        cooldown_until = datetime.now() + timedelta(minutes=minutes)
-
-        conn = self._get_connection()
-        try:
-            conn.execute("""
-                INSERT OR REPLACE INTO symbol_cooldowns (symbol, cooldown_until, reason)
-                VALUES (?, ?, ?)
-            """, (symbol, cooldown_until.isoformat(), reason))
-            conn.commit()
-            logger.info(f"Set {minutes}min cooldown for {symbol} until {cooldown_until.strftime('%H:%M:%S')} (reason: {reason})")
-        finally:
-            conn.close()
-
-    def is_symbol_in_cooldown(self, symbol: str) -> tuple[bool, Optional[str]]:
-        """
-        Check if a symbol is currently in cooldown.
-
-        Returns:
-            Tuple of (is_in_cooldown, reason_or_time_remaining)
-        """
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute(
-                "SELECT cooldown_until, reason FROM symbol_cooldowns WHERE symbol = ?",
-                (symbol,)
-            )
-            row = cursor.fetchone()
-
-            if not row:
-                return (False, None)
-
-            cooldown_until = datetime.fromisoformat(row['cooldown_until'])
-            now = datetime.now()
-
-            if now < cooldown_until:
-                remaining = cooldown_until - now
-                mins = int(remaining.total_seconds() / 60)
-                secs = int(remaining.total_seconds() % 60)
-                return (True, f"{mins}m {secs}s remaining (reason: {row['reason']})")
-            else:
-                # Cooldown expired, clean it up
-                conn.execute("DELETE FROM symbol_cooldowns WHERE symbol = ?", (symbol,))
-                conn.commit()
-                return (False, None)
-        finally:
-            conn.close()
-
-    def clear_symbol_cooldown(self, symbol: str):
-        """Clear cooldown for a symbol."""
-        conn = self._get_connection()
-        try:
-            conn.execute("DELETE FROM symbol_cooldowns WHERE symbol = ?", (symbol,))
-            conn.commit()
-            logger.info(f"Cleared cooldown for {symbol}")
-        finally:
-            conn.close()
-
-    def clear_all_cooldowns(self):
-        """Clear all cooldowns (useful for daily reset)."""
-        conn = self._get_connection()
-        try:
-            conn.execute("DELETE FROM symbol_cooldowns")
-            conn.commit()
-            logger.info("Cleared all symbol cooldowns")
-        finally:
-            conn.close()
-
-    def increment_daily_trade_count(self, symbol: str) -> int:
-        """
-        Increment the daily trade count for a symbol.
-
-        Returns:
-            The new count for today
-        """
-        today = datetime.now().strftime('%Y-%m-%d')
-        conn = self._get_connection()
-        try:
-            # Try to update existing count
-            cursor = conn.execute("""
-                UPDATE daily_trade_counts
-                SET trade_count = trade_count + 1
-                WHERE symbol = ? AND trade_date = ?
-            """, (symbol, today))
-
-            if cursor.rowcount == 0:
-                # No existing record, insert new one
-                conn.execute("""
-                    INSERT INTO daily_trade_counts (symbol, trade_date, trade_count)
-                    VALUES (?, ?, 1)
-                """, (symbol, today))
-
-            conn.commit()
-
-            # Get the current count
-            cursor = conn.execute(
-                "SELECT trade_count FROM daily_trade_counts WHERE symbol = ? AND trade_date = ?",
-                (symbol, today)
-            )
-            row = cursor.fetchone()
-            count = row[0] if row else 1
-            logger.debug(f"{symbol} daily trade count: {count}")
-            return count
-        finally:
-            conn.close()
-
-    def get_daily_trade_count(self, symbol: str) -> int:
-        """Get the number of trades for a symbol today."""
-        today = datetime.now().strftime('%Y-%m-%d')
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute(
-                "SELECT trade_count FROM daily_trade_counts WHERE symbol = ? AND trade_date = ?",
-                (symbol, today)
-            )
-            row = cursor.fetchone()
-            return row[0] if row else 0
-        finally:
-            conn.close()
-
     def get_daily_pnl(self) -> float:
         """Get total P&L for trades closed today."""
         today = datetime.now().strftime('%Y-%m-%d')
         conn = self._get_connection()
         try:
             cursor = conn.execute("""
-                SELECT COALESCE(SUM(pnl_amount), 0)
-                FROM paper_trades
-                WHERE status != 'OPEN'
-                AND date(exit_time) = ?
+                SELECT COALESCE(SUM(pnl_amount), 0) FROM paper_trades
+                WHERE status != 'OPEN' AND date(exit_time) = ?
             """, (today,))
             return cursor.fetchone()[0] or 0.0
         finally:
             conn.close()
 
-    def reset_daily_counts(self):
-        """Reset daily trade counts (call at midnight)."""
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    # ==================== Portfolio Tracking ====================
+
+    def save_portfolio_snapshot(self, equity: float, drawdown: float, peak_equity: float):
+        """Save a portfolio snapshot for drawdown tracking."""
         conn = self._get_connection()
         try:
-            conn.execute("DELETE FROM daily_trade_counts WHERE trade_date < ?", (yesterday,))
+            conn.execute("""
+                INSERT INTO portfolio_snapshots (equity, drawdown, peak_equity)
+                VALUES (?, ?, ?)
+            """, (equity, drawdown, peak_equity))
             conn.commit()
-            logger.info("Reset daily trade counts")
+        finally:
+            conn.close()
+
+    def get_peak_equity(self) -> float:
+        """Get the highest recorded equity (for drawdown calculation)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT MAX(peak_equity) FROM portfolio_snapshots"
+            )
+            row = cursor.fetchone()
+            return row[0] or 0.0
+        finally:
+            conn.close()
+
+    def get_current_drawdown(self) -> float:
+        """Get the most recent drawdown reading."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT drawdown FROM portfolio_snapshots ORDER BY id DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            return row[0] if row else 0.0
+        finally:
+            conn.close()
+
+    # ==================== Instrument Signals ====================
+
+    def save_instrument_signal(
+        self, symbol: str,
+        tsmom_score: float, csmom_score: float, combined_score: float,
+        price: float, atr_value: float, volatility: float,
+    ):
+        """Save daily instrument signal for audit trail."""
+        conn = self._get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO instrument_signals
+                (symbol, tsmom_score, csmom_score, combined_score,
+                 price, atr_value, volatility, signal_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (symbol, tsmom_score, csmom_score, combined_score,
+                  price, atr_value, volatility, datetime.now().strftime('%Y-%m-%d')))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_instrument_signals(self, date: Optional[str] = None) -> list[dict]:
+        """Get instrument signals for a date (default: today)."""
+        date = date or datetime.now().strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM instrument_signals WHERE signal_date = ? ORDER BY combined_score DESC",
+                (date,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    # ==================== Legacy compatibility ====================
+
+    def set_symbol_cooldown(self, symbol: str, minutes: int, reason: str = "stop_loss"):
+        """Legacy: cooldowns not used in trend-following but kept for compatibility."""
+        pass
+
+    def is_symbol_in_cooldown(self, symbol: str) -> tuple[bool, Optional[str]]:
+        """Legacy: always returns not in cooldown."""
+        return (False, None)
+
+    def increment_daily_trade_count(self, symbol: str) -> int:
+        """Legacy: not used in daily rebalancing."""
+        return 0
+
+    def get_daily_trade_count(self, symbol: str) -> int:
+        """Legacy: not used in daily rebalancing."""
+        return 0
+
+    def get_symbols_with_data(self) -> list[str]:
+        """Get list of symbols that have stored data."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("SELECT DISTINCT symbol FROM ohlcv ORDER BY symbol")
+            return [row[0] for row in cursor.fetchall()]
         finally:
             conn.close()

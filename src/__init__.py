@@ -1,11 +1,1 @@
-# IBKR Trading Bot
-
-from .backtester import (
-    Backtester,
-    BacktestConfig,
-    BacktestRunner,
-    BacktestResult,
-    BacktestTrade,
-    BacktestPosition,
-    quick_backtest,
-)
+# IBKR Trading Bot - Trend Following Strategy

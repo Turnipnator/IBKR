@@ -1,6 +1,7 @@
 """
-Decision Engine - Core trading logic.
-Analyzes signals and executes trades based on strategy rules.
+Decision Engine - Trend-following / momentum strategy.
+Computes TSMOM + CSMOM signals, generates rebalance orders,
+and manages portfolio-level risk.
 """
 
 import asyncio
@@ -18,7 +19,10 @@ from enum import Enum
 from .connection import ConnectionManager, get_connection
 from .data_fetcher import DataFetcher
 from .database import Database
-from .indicators import TechnicalAnalyzer, Signal
+from .indicators import (
+    TrendFollowingAnalyzer, Signal,
+    rank_cross_sectional, compute_combined_signal,
+)
 from .orders import OrderManager, PositionManager, OrderAction, OrderResult
 from .config import trading_config, TradingConfig
 
@@ -30,20 +34,23 @@ class TradeDecision(Enum):
     BUY = "BUY"
     SELL = "SELL"
     HOLD = "HOLD"
-    CLOSE = "CLOSE"  # Close existing position
+    CLOSE = "CLOSE"
 
 
 @dataclass
 class TradeOpportunity:
-    """Represents a potential trade."""
+    """Represents a rebalance action for one instrument."""
     symbol: str
     decision: TradeDecision
     signal: Signal
     current_price: float
-    position_size: int
+    position_size: int  # target delta in shares (positive = buy, always positive here)
     reasons: list[str]
     stop_loss_price: Optional[float] = None
-    take_profit_price: Optional[float] = None
+    take_profit_price: Optional[float] = None  # always None for trend-following
+    target_weight: float = 0.0  # target portfolio weight
+    signal_score: float = 0.0   # combined TSMOM + CSMOM score
+    atr_value: float = 0.0      # current ATR for position sizing
 
 
 @dataclass
@@ -56,43 +63,45 @@ class EngineState:
     opportunities: list[TradeOpportunity] = field(default_factory=list)
     market_ok: bool = True
     market_reason: str = ""
-    market_trend: str = "SIDEWAYS"  # SPY trend: BULLISH, BEARISH, or SIDEWAYS
+    # Trend-following state
+    signals: dict = field(default_factory=dict)  # symbol -> combined signal
+    peak_equity: float = 0.0
+    current_drawdown: float = 0.0
 
 
 class DecisionEngine:
     """
-    Core decision engine for automated trading.
+    Trend-following decision engine.
 
     Workflow:
-    1. Fetch latest data for all symbols
-    2. Calculate technical indicators
-    3. Generate signals
-    4. Apply risk management rules
-    5. Execute qualifying trades
+    1. Fetch 1Y daily data for all instruments
+    2. Compute TSMOM signal per instrument (multi-lookback)
+    3. Compute CSMOM ranking across instruments
+    4. Combine signals and apply threshold
+    5. Calculate volatility-scaled target positions
+    6. Generate rebalance orders (delta from current)
+    7. Check portfolio-level risk (drawdown circuit breaker)
 
     Usage:
         engine = DecisionEngine()
-        engine.run_analysis()  # Analyze only
-        engine.run_trading()   # Analyze and execute
+        opportunities = engine.run_analysis()
     """
 
     def __init__(
         self,
         connection: Optional[ConnectionManager] = None,
         config: Optional[TradingConfig] = None,
-        dry_run: bool = True,  # Safety: default to not executing
+        dry_run: bool = True,
     ):
         self.connection = connection or get_connection()
         self.config = config or trading_config
         self.dry_run = dry_run
 
-        # Initialize components
         self.db = Database()
         self.fetcher = DataFetcher(self.connection)
         self.order_manager = OrderManager(self.connection, self.db)
         self.position_manager = PositionManager(self.connection, self.order_manager)
 
-        # State
         self.state = EngineState()
 
     def _get_all_symbols(self) -> list[str]:
@@ -100,486 +109,436 @@ class DecisionEngine:
         from .config import _load_watchlist
         self.config.symbols = _load_watchlist()
         symbols = []
-        for sector_symbols in self.config.symbols.values():
-            symbols.extend(sector_symbols)
+        for asset_class_symbols in self.config.symbols.values():
+            symbols.extend(asset_class_symbols)
         return symbols
 
-    def _get_sector(self, symbol: str) -> Optional[str]:
-        """Get the sector for a symbol."""
-        for sector, symbols in self.config.symbols.items():
+    def _get_asset_class(self, symbol: str) -> Optional[str]:
+        """Get the asset class for a symbol."""
+        for asset_class, symbols in self.config.symbols.items():
             if symbol in symbols:
-                return sector
+                return asset_class
         return None
 
-    def _check_sector_exposure(self, sector: str) -> float:
-        """Calculate current exposure to a sector as % of portfolio."""
-        portfolio = self.position_manager.get_portfolio_value()
-        net_liq = portfolio.get('net_liquidation', 0)
-        if net_liq <= 0:
-            return 0.0
-
-        sector_value = 0.0
-        positions = self.position_manager.get_positions()
-        sector_symbols = self.config.symbols.get(sector, [])
-
-        for pos in positions:
-            if pos.symbol in sector_symbols:
-                sector_value += abs(pos.market_value)
-
-        return sector_value / net_liq
-
-    def _passes_risk_checks(self, opportunity: TradeOpportunity) -> tuple[bool, list[str]]:
+    def _compute_all_signals(self, data: dict[str, any]) -> dict[str, dict]:
         """
-        Check if a trade opportunity passes risk management rules.
+        Compute TSMOM and CSMOM signals for all instruments.
 
-        Based on Binance winning strategy filters:
-        - Signal strength >= 60%
-        - No cooldown active
-        - Under max trades per symbol per day
-        - Under daily loss limit
+        Args:
+            data: Dict of symbol -> DataFrame
 
         Returns:
-            Tuple of (passes, list of failure reasons)
+            Dict of symbol -> {tsmom, csmom, combined, reasons, price, atr, volatility}
         """
-        failures = []
+        lookbacks = [
+            self.config.lookback_short,
+            self.config.lookback_medium,
+            self.config.lookback_long,
+        ]
 
-        # Check 1: Signal strength threshold (use config value, default 60%)
-        min_strength = getattr(self.config, 'min_signal_strength', 0.60)
-        if opportunity.signal.strength < min_strength:
-            failures.append(f"Signal strength too low ({opportunity.signal.strength:.0%} < {min_strength:.0%})")
+        # Step 1: Compute TSMOM for each instrument
+        tsmom_scores = {}
+        instrument_data = {}
 
-        # Check 2: Cooldown check (anti-churning)
-        in_cooldown, cooldown_reason = self.db.is_symbol_in_cooldown(opportunity.symbol)
-        if in_cooldown:
-            failures.append(f"Symbol in cooldown: {cooldown_reason}")
+        for symbol, df in data.items():
+            analyzer = TrendFollowingAnalyzer(df, lookbacks=lookbacks, atr_period=self.config.atr_period)
+            tsmom_score, reasons = analyzer.compute_tsmom_signal()
+            price = analyzer.get_current_price()
+            atr_val = analyzer.compute_atr()
+            vol = analyzer.compute_volatility()
 
-        # Check 3: Max trades per symbol per day
-        max_trades = getattr(self.config, 'max_trades_per_symbol_day', 3)
-        daily_count = self.db.get_daily_trade_count(opportunity.symbol)
-        if daily_count >= max_trades:
-            failures.append(f"Max daily trades reached for {opportunity.symbol} ({daily_count}/{max_trades})")
+            tsmom_scores[symbol] = tsmom_score
+            instrument_data[symbol] = {
+                "tsmom": tsmom_score,
+                "reasons": reasons,
+                "price": price,
+                "atr": atr_val,
+                "volatility": vol,
+            }
 
-        # Check 4: Daily loss limit
-        max_daily_loss = getattr(self.config, 'max_daily_loss', 5000.0)
-        daily_pnl = self.db.get_daily_pnl()
-        if daily_pnl < -max_daily_loss:
-            failures.append(f"Daily loss limit exceeded (${daily_pnl:.2f} < -${max_daily_loss:.2f})")
+            logger.info(
+                f"  {symbol}: TSMOM={tsmom_score:+.2f} | "
+                f"${price:.2f} | ATR=${atr_val:.2f} | Vol={vol:.1%} | "
+                f"{', '.join(reasons)}"
+            )
 
-        # Check 2: Position size > 0
-        if opportunity.position_size <= 0:
-            failures.append("Position size is zero")
+        # Step 2: Compute CSMOM ranking
+        csmom_scores = rank_cross_sectional(tsmom_scores)
 
-        # Check 3: Max position size (% of portfolio)
-        portfolio = self.position_manager.get_portfolio_value()
-        net_liq = portfolio.get('net_liquidation', 0)
-        if net_liq > 0:
-            position_value = opportunity.position_size * opportunity.current_price
-            position_pct = position_value / net_liq
-            if position_pct > self.config.max_position_pct:
-                failures.append(
-                    f"Position too large ({position_pct:.1%} > {self.config.max_position_pct:.1%})"
-                )
+        # Step 3: Combine signals
+        results = {}
+        for symbol in instrument_data:
+            tsmom = instrument_data[symbol]["tsmom"]
+            csmom = csmom_scores.get(symbol, 0.0)
+            combined = compute_combined_signal(
+                tsmom, csmom,
+                self.config.tsmom_weight,
+                self.config.csmom_weight,
+            )
 
-        # Check 4: Sector exposure limit
-        sector = self._get_sector(opportunity.symbol)
-        if sector:
-            current_exposure = self._check_sector_exposure(sector)
-            if current_exposure >= self.config.max_sector_pct:
-                failures.append(
-                    f"Sector {sector} exposure at limit ({current_exposure:.1%})"
-                )
+            instrument_data[symbol]["csmom"] = csmom
+            instrument_data[symbol]["combined"] = combined
+            results[symbol] = instrument_data[symbol]
 
-        # Check 5: Don't buy if we already have a position
-        if opportunity.decision == TradeDecision.BUY:
-            existing_qty = self.position_manager.get_position_quantity(opportunity.symbol)
-            if existing_qty > 0:
-                failures.append(f"Already have position ({existing_qty} shares)")
+            logger.info(
+                f"  {symbol}: Combined={combined:+.2f} "
+                f"(TSMOM={tsmom:+.2f} * {self.config.tsmom_weight} + "
+                f"CSMOM={csmom:+.2f} * {self.config.csmom_weight})"
+            )
 
-        return (len(failures) == 0, failures)
+        return results
 
-    def analyze_symbol(self, symbol: str) -> Optional[TradeOpportunity]:
+    def _calculate_target_positions(
+        self,
+        signals: dict[str, dict],
+        net_liq: float,
+    ) -> dict[str, dict]:
         """
-        Analyze a single symbol and generate trade opportunity if any.
-        Uses 5-minute bars for scalping strategy.
+        Calculate target position sizes using volatility-scaled sizing.
+
+        Args:
+            signals: Dict of symbol -> signal data (from _compute_all_signals)
+            net_liq: Current net liquidation value
 
         Returns:
-            TradeOpportunity or None if no action recommended
+            Dict of symbol -> {target_shares, target_weight, direction, stop_price}
         """
-        try:
-            # Fetch data using config settings (5-min bars for scalping)
-            bar_size = getattr(self.config, 'bar_size', '5 mins')
-            duration = getattr(self.config, 'data_duration', '2 D')
+        threshold = self.config.signal_threshold
+        targets = {}
 
-            df = self.fetcher.get_historical_data(
-                symbol,
-                duration=duration,
-                bar_size=bar_size
-            )
+        # Filter to instruments with signals above threshold
+        active_signals = {
+            sym: data for sym, data in signals.items()
+            if abs(data["combined"]) >= threshold
+        }
 
-            if df is None or df.empty:
-                logger.warning(f"No data available for {symbol}")
-                return None
+        if not active_signals:
+            logger.info("No signals above threshold — all flat")
+            return targets
 
-            # Save to database
-            self.db.save_ohlcv(df, symbol)
+        # Count active positions for risk budget distribution
+        num_active = len(active_signals)
+        risk_per_position = (net_liq * self.config.risk_budget) / num_active
 
-            # Calculate indicators with momentum scalping settings
-            ema_fast = getattr(self.config, 'ema_fast', self.config.sma_fast)
-            ema_slow = getattr(self.config, 'ema_slow', self.config.sma_slow)
-            ema_trend = getattr(self.config, 'ema_trend', 50)
+        for symbol, data in active_signals.items():
+            combined = data["combined"]
+            price = data["price"]
+            atr_val = data["atr"]
+            vol = data["volatility"]
 
-            analyzer = TechnicalAnalyzer(
-                df,
-                sma_fast=ema_fast,
-                sma_slow=ema_slow,
-                ema_trend=ema_trend,
-                rsi_period=self.config.rsi_period,
-                rsi_overbought=self.config.rsi_overbought,
-                rsi_oversold=self.config.rsi_oversold,
-                use_ema=True,  # Use EMA for scalping
-            )
-            analyzer.calculate_all()
+            if price <= 0 or atr_val <= 0:
+                continue
 
-            # Detect 5-min trend
-            trend = analyzer.detect_trend()
-            enable_shorting = getattr(self.config, 'enable_shorting', False)
-            require_bullish = getattr(self.config, 'require_bullish_trend', True)
+            # Direction
+            is_long = combined > 0
+            if not is_long and not self.config.enable_shorting:
+                continue  # Skip shorts if disabled
 
-            # Determine trade direction based on trend
-            trade_direction = None  # 'LONG', 'SHORT', or None
+            # Position size = risk_budget / (ATR * multiplier)
+            # This gives each position equal risk contribution
+            dollar_risk = atr_val * self.config.atr_stop_multiplier
+            if dollar_risk <= 0:
+                continue
 
-            if trend == 'BULLISH':
-                trade_direction = 'LONG'
-            elif trend == 'BEARISH' and enable_shorting:
-                trade_direction = 'SHORT'
-            elif require_bullish:
-                logger.info(f"  {symbol}: Skipped - trend is {trend} (need BULLISH for long)")
-                return None
+            target_value = risk_per_position / (dollar_risk / price)
+            # Clamp to max position size
+            max_value = net_liq * self.config.max_position_pct
+            target_value = min(target_value, max_value)
 
-            if trade_direction is None:
-                logger.info(f"  {symbol}: Skipped - trend is {trend} (no trade direction)")
-                return None
+            target_shares = int(target_value / price)
+            if target_shares <= 0:
+                continue
 
-            # SPY market filter: only trade in direction of overall market
-            market_trend = self.state.market_trend
-            if market_trend == 'SIDEWAYS':
-                logger.info(f"  {symbol}: Skipped - SPY is SIDEWAYS (no trades in choppy market)")
-                return None
-            elif market_trend == 'BULLISH' and trade_direction == 'SHORT':
-                logger.info(f"  {symbol}: Skipped - SPY is BULLISH (no shorts in bull market)")
-                return None
-            elif market_trend == 'BEARISH' and trade_direction == 'LONG':
-                logger.info(f"  {symbol}: Skipped - SPY is BEARISH (no longs in bear market)")
-                return None
+            # Apply direction
+            if not is_long:
+                target_shares = -target_shares
 
-            # Multi-timeframe confirmation: check 1H trend aligns with 5-min
-            use_hourly = getattr(self.config, 'use_hourly_confirmation', False)
-            if use_hourly:
-                hourly_trend = self._check_hourly_trend(symbol)
-                required_trend = 'BULLISH' if trade_direction == 'LONG' else 'BEARISH'
-                if hourly_trend != required_trend:
-                    logger.info(f"  {symbol}: Skipped - 1H trend is {hourly_trend} (need {required_trend} for {trade_direction})")
-                    return None
-
-            # Check volume confirmation (from Binance winning strategy)
-            volume_mult = getattr(self.config, 'volume_multiplier', 1.5)
-            vol_confirmed, vol_ratio = analyzer.check_volume_confirmation(volume_mult)
-            if not vol_confirmed:
-                logger.info(f"  {symbol}: Skipped - volume {vol_ratio:.1f}x (need {volume_mult}x)")
-                return None
-
-            # Generate signal
-            signal = analyzer.generate_signal(symbol)
-
-            # Use momentum score if available (for shorts, we want low momentum)
-            momentum_score = analyzer.get_momentum_score()
-            if trade_direction == 'LONG' and momentum_score < 0.5:
-                logger.info(f"  {symbol}: Skipped - momentum {momentum_score:.0%} (need 50%+ for LONG)")
-                return None
-            elif trade_direction == 'SHORT' and momentum_score > 0.5:
-                logger.info(f"  {symbol}: Skipped - momentum {momentum_score:.0%} (need <50% for SHORT)")
-                return None
-
-            # Get current price
-            current_price = float(df['close'].iloc[-1])
-
-            # RSI filter
-            rsi_value = signal.indicators.get('rsi')
-            if trade_direction == 'LONG' and rsi_value and rsi_value > self.config.rsi_overbought:
-                logger.info(f"  {symbol}: Skipped - RSI overbought ({rsi_value:.1f} > {self.config.rsi_overbought})")
-                return None
-            elif trade_direction == 'SHORT' and rsi_value and rsi_value < self.config.rsi_oversold:
-                logger.info(f"  {symbol}: Skipped - RSI oversold ({rsi_value:.1f} < {self.config.rsi_oversold})")
-                return None
-
-            # Check existing position
-            existing_position = self.position_manager.get_position_quantity(symbol)
-
-            # Determine decision based on direction
-            if trade_direction == 'LONG' and existing_position == 0:
-                decision = TradeDecision.BUY
-                position_size = self.position_manager.calculate_position_size(
-                    symbol, current_price, self.config.max_position_pct
-                )
-                # Long: SL below entry, TP above entry
-                stop_loss = round(current_price * (1 - self.config.stop_loss_pct), 2)
-                take_profit = round(current_price * (1 + self.config.take_profit_pct), 2)
-
-            elif trade_direction == 'SHORT' and existing_position == 0:
-                decision = TradeDecision.SELL  # SELL to open short
-                position_size = self.position_manager.calculate_position_size(
-                    symbol, current_price, self.config.max_position_pct
-                )
-                # Short: SL above entry, TP below entry
-                stop_loss = round(current_price * (1 + self.config.stop_loss_pct), 2)
-                take_profit = round(current_price * (1 - self.config.take_profit_pct), 2)
-
-            elif existing_position != 0:
-                # Already have a position - hold for now (SL/TP handled by bot.py)
-                decision = TradeDecision.HOLD
-                position_size = 0
-                stop_loss = None
-                take_profit = None
-
+            # Trailing stop: 3x ATR from current price
+            if is_long:
+                stop_price = round(price - self.config.atr_stop_multiplier * atr_val, 2)
             else:
-                decision = TradeDecision.HOLD
-                position_size = 0
-                stop_loss = None
-                take_profit = None
+                stop_price = round(price + self.config.atr_stop_multiplier * atr_val, 2)
 
-            if decision == TradeDecision.HOLD:
-                return None
+            target_weight = (target_shares * price) / net_liq
 
-            return TradeOpportunity(
-                symbol=symbol,
-                decision=decision,
-                signal=signal,
-                current_price=current_price,
-                position_size=position_size,
-                reasons=signal.reasons,
-                stop_loss_price=stop_loss,
-                take_profit_price=take_profit,
-            )
+            targets[symbol] = {
+                "target_shares": target_shares,
+                "target_weight": target_weight,
+                "direction": "LONG" if is_long else "SHORT",
+                "stop_price": stop_price,
+                "signal_score": combined,
+                "atr": atr_val,
+                "price": price,
+            }
 
-        except Exception as e:
-            logger.error(f"Error analyzing {symbol}: {e}")
-            self.state.errors.append(f"{symbol}: {str(e)}")
-            return None
+        # Enforce asset class limits
+        targets = self._apply_asset_class_limits(targets, net_liq)
 
-    def _check_market_condition(self) -> tuple[str, str]:
+        # Enforce gross exposure limit
+        targets = self._apply_gross_exposure_limit(targets, net_liq)
+
+        return targets
+
+    def _apply_asset_class_limits(
+        self, targets: dict, net_liq: float,
+    ) -> dict:
+        """Reduce positions if an asset class exceeds its limit."""
+        max_pct = self.config.max_asset_class_pct
+        class_exposure = {}
+
+        for symbol, t in targets.items():
+            ac = self._get_asset_class(symbol) or "other"
+            class_exposure.setdefault(ac, 0.0)
+            class_exposure[ac] += abs(t["target_weight"])
+
+        for ac, exposure in class_exposure.items():
+            if exposure > max_pct:
+                scale = max_pct / exposure
+                for symbol, t in targets.items():
+                    if (self._get_asset_class(symbol) or "other") == ac:
+                        t["target_shares"] = int(t["target_shares"] * scale)
+                        t["target_weight"] = (t["target_shares"] * t["price"]) / net_liq
+                logger.info(f"Scaled {ac} from {exposure:.1%} to {max_pct:.1%}")
+
+        return targets
+
+    def _apply_gross_exposure_limit(
+        self, targets: dict, net_liq: float,
+    ) -> dict:
+        """Scale all positions if gross exposure exceeds limit."""
+        gross = sum(abs(t["target_weight"]) for t in targets.values())
+        if gross > self.config.max_gross_exposure:
+            scale = self.config.max_gross_exposure / gross
+            for t in targets.values():
+                t["target_shares"] = int(t["target_shares"] * scale)
+                t["target_weight"] = (t["target_shares"] * t["price"]) / net_liq
+            logger.info(f"Scaled gross exposure from {gross:.1%} to {self.config.max_gross_exposure:.1%}")
+        return targets
+
+    def _check_portfolio_risk(self, net_liq: float) -> tuple[bool, str]:
         """
-        Check overall market condition using SPY as a proxy.
-        Returns trend to determine allowed trade directions:
-        - BULLISH: allow LONG trades only
-        - BEARISH: allow SHORT trades only
-        - SIDEWAYS: skip all trades
+        Check portfolio-level risk (drawdown circuit breaker).
 
         Returns:
-            Tuple of (trend, reason)
+            Tuple of (is_ok, reason)
         """
-        try:
-            logger.info("Checking market condition (SPY)...")
-            df = self.fetcher.get_historical_data("SPY", duration=self.config.data_duration,
-                                                  bar_size=self.config.bar_size)
+        peak = self.db.get_peak_equity()
+        if peak <= 0:
+            peak = net_liq
+            self.db.save_portfolio_snapshot(net_liq, 0.0, peak)
 
-            if df is None or df.empty or len(df) < 50:
-                logger.warning("Could not fetch SPY data for market check")
-                return ("SIDEWAYS", "SPY data unavailable - skipping trades")
+        # Update peak if new high
+        if net_liq > peak:
+            peak = net_liq
 
-            analyzer = TechnicalAnalyzer(
-                df,
-                sma_fast=self.config.ema_fast,
-                sma_slow=self.config.ema_slow,
-                ema_trend=self.config.ema_trend,
-                rsi_period=self.config.rsi_period,
-                use_ema=True,
-            )
-            analyzer.calculate_all()
+        drawdown = (peak - net_liq) / peak if peak > 0 else 0.0
+        self.state.peak_equity = peak
+        self.state.current_drawdown = drawdown
 
-            trend = analyzer.detect_trend()
-            latest = df.iloc[-1]
-            spy_price = latest['close']
+        self.db.save_portfolio_snapshot(net_liq, drawdown, peak)
 
-            if trend == 'BULLISH':
-                return (trend, f"SPY ${spy_price:.2f} - BULLISH (longs allowed)")
-            elif trend == 'BEARISH':
-                return (trend, f"SPY ${spy_price:.2f} - BEARISH (shorts allowed)")
-            else:
-                return (trend, f"SPY ${spy_price:.2f} - SIDEWAYS (no trades)")
+        if drawdown >= self.config.drawdown_halt_pct:
+            return False, f"HALT: {drawdown:.1%} drawdown from peak ${peak:,.0f} (threshold {self.config.drawdown_halt_pct:.0%})"
 
-        except Exception as e:
-            logger.error(f"Error checking market condition: {e}")
-            return ("SIDEWAYS", f"Market check failed: {e} - skipping trades")
+        if drawdown >= self.config.drawdown_reduce_pct:
+            return True, f"REDUCE: {drawdown:.1%} drawdown — halving position sizes"
 
-    def _check_hourly_trend(self, symbol: str) -> str:
-        """
-        Check the 1-hour trend for multi-timeframe confirmation.
-        This helps filter out entries that go against the bigger picture.
-
-        Returns:
-            'BULLISH', 'BEARISH', or 'SIDEWAYS'
-        """
-        try:
-            # Fetch 1-hour bars - need 20 days for EMA50 to have enough data
-            # 20 trading days × ~7 hours = ~140 bars
-            df = self.fetcher.get_historical_data(
-                symbol,
-                duration="20 D",
-                bar_size="1 hour"
-            )
-
-            if df is None or df.empty or len(df) < 55:
-                logger.debug(f"{symbol}: Insufficient 1H data ({len(df) if df is not None else 0} bars), defaulting to SIDEWAYS")
-                return 'SIDEWAYS'
-
-            analyzer = TechnicalAnalyzer(
-                df,
-                sma_fast=self.config.ema_fast,
-                sma_slow=self.config.ema_slow,
-                ema_trend=self.config.ema_trend,
-                rsi_period=self.config.rsi_period,
-                use_ema=True,
-            )
-            analyzer.calculate_all()
-
-            trend = analyzer.detect_trend()
-            logger.debug(f"{symbol}: 1H trend is {trend}")
-            return trend
-
-        except Exception as e:
-            logger.warning(f"{symbol}: Error checking 1H trend: {e}")
-            return 'SIDEWAYS'  # Default to sideways on error (blocks entry)
+        return True, f"OK: {drawdown:.1%} drawdown from peak ${peak:,.0f}"
 
     def run_analysis(self) -> list[TradeOpportunity]:
         """
-        Run analysis on all symbols without executing trades.
+        Run full trend-following analysis on all instruments.
 
         Returns:
-            List of trade opportunities
+            List of TradeOpportunity objects representing rebalance actions
         """
         if not self.connection.ensure_connected():
             logger.error("Cannot run analysis: not connected")
             return []
 
-        logger.info("Starting market analysis...")
+        logger.info("Starting trend-following analysis...")
         self.state = EngineState(last_run=datetime.now())
 
-        # Check market condition first (SPY filter)
-        market_trend, market_reason = self._check_market_condition()
-        self.state.market_trend = market_trend
-        self.state.market_ok = market_trend != 'SIDEWAYS'  # For backwards compat
-        self.state.market_reason = market_reason
-        logger.info(f"Market condition: {market_reason}")
+        # Get portfolio value
+        portfolio = self.position_manager.get_portfolio_value()
+        net_liq = portfolio.get('net_liquidation', 0)
+        if net_liq <= 0:
+            logger.error("Cannot get portfolio value")
+            return []
 
+        logger.info(f"Portfolio: ${net_liq:,.0f}")
+
+        # Check portfolio-level risk
+        risk_ok, risk_reason = self._check_portfolio_risk(net_liq)
+        self.state.market_ok = risk_ok
+        self.state.market_reason = risk_reason
+        logger.info(f"Risk check: {risk_reason}")
+
+        if "HALT" in risk_reason:
+            logger.warning("DRAWDOWN HALT — closing all positions")
+            return []
+
+        # Fetch data for all instruments
         symbols = self._get_all_symbols()
-        opportunities = []
+        logger.info(f"\n--- Fetching {len(symbols)} instruments ---")
 
+        data = {}
         for symbol in symbols:
-            logger.info(f"Analyzing {symbol}...")
-            opportunity = self.analyze_symbol(symbol)
-
-            if opportunity:
-                # Check risk management
-                passes, failures = self._passes_risk_checks(opportunity)
-
-                if passes:
-                    opportunities.append(opportunity)
-                    logger.info(
-                        f"  {symbol}: {opportunity.decision.value} "
-                        f"({opportunity.signal.strength:.0%} confidence)"
-                    )
+            try:
+                df = self.fetcher.get_historical_data(
+                    symbol,
+                    duration=self.config.data_duration,
+                    bar_size=self.config.bar_size,
+                )
+                if df is not None and len(df) >= self.config.lookback_short + 5:
+                    data[symbol] = df
+                    self.db.save_ohlcv(df, symbol)
                 else:
-                    logger.info(f"  {symbol}: Opportunity rejected - {', '.join(failures)}")
-            else:
-                logger.info(f"  {symbol}: HOLD (no action)")
+                    logger.warning(f"  {symbol}: insufficient data ({len(df) if df is not None else 0} bars)")
+            except Exception as e:
+                logger.error(f"  {symbol}: fetch error — {e}")
+                self.state.errors.append(f"{symbol}: {e}")
 
             self.state.symbols_analyzed += 1
-            self.connection.ib.sleep(0.5)  # Rate limiting
+            self.connection.ib.sleep(0.5)
+
+        logger.info(f"Got data for {len(data)}/{len(symbols)} instruments")
+
+        if not data:
+            logger.error("No data fetched — aborting")
+            return []
+
+        # Compute signals
+        logger.info("\n--- Computing signals ---")
+        signals = self._compute_all_signals(data)
+        self.state.signals = {s: d["combined"] for s, d in signals.items()}
+
+        # Save signals to DB for audit trail
+        for symbol, sig_data in signals.items():
+            self.db.save_instrument_signal(
+                symbol=symbol,
+                tsmom_score=sig_data["tsmom"],
+                csmom_score=sig_data["csmom"],
+                combined_score=sig_data["combined"],
+                price=sig_data["price"],
+                atr_value=sig_data["atr"],
+                volatility=sig_data["volatility"],
+            )
+
+        # Calculate target positions
+        logger.info("\n--- Calculating target positions ---")
+        reduce_mode = "REDUCE" in risk_reason
+        targets = self._calculate_target_positions(signals, net_liq)
+
+        if reduce_mode:
+            logger.info("REDUCE mode — halving all targets")
+            for t in targets.values():
+                t["target_shares"] = int(t["target_shares"] * 0.5)
+                t["target_weight"] = (t["target_shares"] * t["price"]) / net_liq
+
+        # Generate opportunities (rebalance orders)
+        opportunities = []
+        for symbol, target in targets.items():
+            target_shares = target["target_shares"]
+            direction = target["direction"]
+            price = target["price"]
+
+            # For paper trading: create opportunity for new positions
+            # (the bot.py handles the actual paper trade opening/closing)
+            if target_shares > 0:
+                decision = TradeDecision.BUY
+            elif target_shares < 0:
+                decision = TradeDecision.SELL
+            else:
+                continue
+
+            reasons = signals[symbol]["reasons"] + [
+                f"Combined signal: {target['signal_score']:+.2f}",
+                f"Direction: {direction}",
+                f"ATR: ${target['atr']:.2f}",
+            ]
+
+            opp = TradeOpportunity(
+                symbol=symbol,
+                decision=decision,
+                signal=Signal(
+                    symbol=symbol,
+                    action=decision.value,
+                    strength=abs(target["signal_score"]),
+                    reasons=reasons,
+                    indicators={
+                        "tsmom": signals[symbol]["tsmom"],
+                        "csmom": signals[symbol]["csmom"],
+                        "combined": signals[symbol]["combined"],
+                        "atr": target["atr"],
+                        "volatility": signals[symbol]["volatility"],
+                    },
+                ),
+                current_price=price,
+                position_size=abs(target_shares),
+                reasons=reasons,
+                stop_loss_price=target["stop_price"],
+                take_profit_price=None,
+                target_weight=target["target_weight"],
+                signal_score=target["signal_score"],
+                atr_value=target["atr"],
+            )
+            opportunities.append(opp)
+
+            logger.info(
+                f"  {decision.value} {abs(target_shares)} {symbol} "
+                f"@ ${price:.2f} (signal {target['signal_score']:+.2f}, "
+                f"stop ${target['stop_price']:.2f})"
+            )
 
         self.state.opportunities = opportunities
-        logger.info(f"Analysis complete: {len(opportunities)} opportunities found")
+        logger.info(f"\nAnalysis complete: {len(opportunities)} rebalance actions")
 
         return opportunities
 
     def execute_opportunity(self, opportunity: TradeOpportunity) -> OrderResult:
         """Execute a single trade opportunity."""
-
         if self.dry_run:
-            logger.info(f"[DRY RUN] Would execute: {opportunity.decision.value} "
-                       f"{opportunity.position_size} {opportunity.symbol}")
+            logger.info(
+                f"[DRY RUN] Would execute: {opportunity.decision.value} "
+                f"{opportunity.position_size} {opportunity.symbol}"
+            )
             return OrderResult(
                 success=True,
-                message=f"[DRY RUN] {opportunity.decision.value} {opportunity.symbol}"
+                message=f"[DRY RUN] {opportunity.decision.value} {opportunity.symbol}",
             )
 
-        if opportunity.decision == TradeDecision.BUY:
-            return self.order_manager.place_market_order(
-                symbol=opportunity.symbol,
-                action=OrderAction.BUY,
-                quantity=opportunity.position_size,
-                reason=f"Signal: {', '.join(opportunity.reasons[:2])}",
-            )
-
-        elif opportunity.decision == TradeDecision.CLOSE:
-            return self.position_manager.close_position(
-                symbol=opportunity.symbol,
-                reason=f"Signal: {', '.join(opportunity.reasons[:2])}",
-            )
-
-        return OrderResult(success=False, message="Unknown decision type")
-
-    def run_trading(self) -> list[OrderResult]:
-        """
-        Run full trading cycle: analyze and execute.
-
-        Returns:
-            List of order results
-        """
-        opportunities = self.run_analysis()
-        results = []
-
-        if not opportunities:
-            logger.info("No trading opportunities found")
-            return results
-
-        logger.info(f"Executing {len(opportunities)} trades...")
-
-        for opportunity in opportunities:
-            result = self.execute_opportunity(opportunity)
-            results.append(result)
-
-            if result.success:
-                self.state.trades_executed += 1
-                logger.info(f"  {opportunity.symbol}: {result.message}")
-            else:
-                logger.error(f"  {opportunity.symbol}: FAILED - {result.message}")
-
-            self.connection.ib.sleep(1)  # Pause between orders
-
-        return results
+        action = (
+            OrderAction.BUY if opportunity.decision == TradeDecision.BUY
+            else OrderAction.SELL
+        )
+        return self.order_manager.place_market_order(
+            symbol=opportunity.symbol,
+            action=action,
+            quantity=opportunity.position_size,
+            reason=f"Trend signal: {opportunity.signal_score:+.2f}",
+        )
 
     def get_status_report(self) -> str:
         """Generate a status report of current state."""
-
         lines = [
             "=" * 50,
-            "TRADING BOT STATUS REPORT",
+            "TREND-FOLLOWING BOT STATUS REPORT",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "=" * 50,
             "",
         ]
 
-        # Portfolio
         portfolio = self.position_manager.get_portfolio_value()
         lines.extend([
             "PORTFOLIO:",
             f"  Net Liquidation: ${portfolio.get('net_liquidation', 0):,.2f}",
             f"  Buying Power:    ${portfolio.get('buying_power', 0):,.2f}",
             f"  Unrealized P&L:  ${portfolio.get('unrealized_pnl', 0):,.2f}",
+            f"  Drawdown:        {self.state.current_drawdown:.1%}",
             "",
         ])
 
-        # Positions
         positions = self.position_manager.get_positions()
         lines.append("POSITIONS:")
         if positions:
@@ -592,32 +551,24 @@ class DecisionEngine:
             lines.append("  No open positions")
         lines.append("")
 
-        # Open orders
-        open_orders = self.order_manager.get_open_orders()
-        lines.append("OPEN ORDERS:")
-        if open_orders:
-            for trade in open_orders:
-                lines.append(
-                    f"  {trade.order.action} {trade.order.totalQuantity} "
-                    f"{trade.contract.symbol} ({trade.orderStatus.status})"
-                )
-        else:
-            lines.append("  No open orders")
-        lines.append("")
+        if self.state.signals:
+            lines.append("SIGNALS (top 10):")
+            sorted_sigs = sorted(self.state.signals.items(), key=lambda x: abs(x[1]), reverse=True)
+            for sym, score in sorted_sigs[:10]:
+                direction = "LONG" if score > 0 else "SHORT" if score < 0 else "FLAT"
+                lines.append(f"  {sym}: {score:+.2f} ({direction})")
+            lines.append("")
 
-        # Last run stats
         if self.state.last_run:
             lines.extend([
                 "LAST ANALYSIS:",
                 f"  Time: {self.state.last_run.strftime('%Y-%m-%d %H:%M:%S')}",
-                f"  Symbols analyzed: {self.state.symbols_analyzed}",
-                f"  Opportunities: {len(self.state.opportunities)}",
-                f"  Trades executed: {self.state.trades_executed}",
+                f"  Instruments analyzed: {self.state.symbols_analyzed}",
+                f"  Rebalance actions: {len(self.state.opportunities)}",
+                f"  Risk status: {self.state.market_reason}",
             ])
-
             if self.state.errors:
                 lines.append(f"  Errors: {len(self.state.errors)}")
 
         lines.append("=" * 50)
-
         return "\n".join(lines)

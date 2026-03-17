@@ -1,5 +1,6 @@
 """
-Main Trading Bot - Entry point for automated trading.
+Main Trading Bot - Trend-following / momentum strategy.
+Daily rebalance at 15:30 ET with intraday risk checks.
 """
 
 import asyncio
@@ -27,15 +28,18 @@ logger = logging.getLogger(__name__)
 
 class TradingBot:
     """
-    Main trading bot that runs the decision engine on a schedule.
+    Trend-following trading bot with daily rebalance scheduling.
+
+    Schedule:
+    - Daily rebalance at 15:30 ET (configurable)
+    - Intraday risk checks every 4 hours (trailing stops, drawdown)
+    - Checks for Telegram commands continuously
 
     Usage:
         bot = TradingBot(dry_run=True)
-        bot.run_once()      # Single analysis
-        bot.run_scheduled() # Continuous scheduled runs
+        bot.run_scheduled()
     """
 
-    # US Market hours (Eastern Time)
     MARKET_OPEN = dtime(9, 30)
     MARKET_CLOSE = dtime(16, 0)
     US_EASTERN = ZoneInfo("America/New_York")
@@ -46,16 +50,8 @@ class TradingBot:
         run_interval_minutes: int = 60,
         enable_telegram: bool = True,
     ):
-        """
-        Initialize the trading bot.
-
-        Args:
-            dry_run: If True, analyze but don't execute trades
-            run_interval_minutes: Minutes between analysis runs
-            enable_telegram: Enable Telegram notifications
-        """
         self.dry_run = dry_run
-        self.run_interval = run_interval_minutes * 60  # Convert to seconds
+        self.run_interval = run_interval_minutes * 60
         self.running = False
 
         self.connection = ConnectionManager()
@@ -63,49 +59,62 @@ class TradingBot:
             connection=self.connection,
             dry_run=dry_run,
         )
-
-        # Database for paper trade tracking
         self.db = Database()
-
-        # Telegram notifications
         self.notifier = get_notifier() if enable_telegram else None
 
-        # Track daily summary sent status
         self._last_summary_date: Optional[str] = None
-
-        # Track connection failures for alerting
+        self._last_rebalance_date: Optional[str] = None
+        self._last_risk_check: Optional[datetime] = None
         self._consecutive_failures = 0
-        self._failure_alert_threshold = 3  # Alert after 3 consecutive failures
-        self._last_failure_alert: Optional[str] = None  # Prevent spam
+        self._failure_alert_threshold = 3
+        self._last_failure_alert: Optional[str] = None
 
-        # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
     def _handle_shutdown(self, signum, frame):
-        """Handle shutdown signals gracefully."""
         logger.info("Shutdown signal received, stopping bot...")
         self.running = False
 
     def _is_market_hours(self) -> bool:
-        """Check if currently within US market hours (Eastern Time)."""
-        # Get current time in US Eastern, regardless of server timezone
+        """Check if currently within US market hours."""
         now_et = datetime.now(self.US_EASTERN)
-
-        # Skip weekends
         if now_et.weekday() >= 5:
             return False
+        return self.MARKET_OPEN <= now_et.time() <= self.MARKET_CLOSE
 
-        current_time = now_et.time()
-        return self.MARKET_OPEN <= current_time <= self.MARKET_CLOSE
+    def _is_rebalance_time(self) -> bool:
+        """Check if it's time for the daily rebalance."""
+        now_et = datetime.now(self.US_EASTERN)
+        today = now_et.strftime('%Y-%m-%d')
+
+        # Already rebalanced today
+        if self._last_rebalance_date == today:
+            return False
+
+        rebalance_time = dtime(
+            trading_config.rebalance_hour,
+            trading_config.rebalance_minute,
+        )
+        # Trigger within a 5-minute window of the rebalance time
+        current = now_et.time()
+        target_minutes = rebalance_time.hour * 60 + rebalance_time.minute
+        current_minutes = current.hour * 60 + current.minute
+        return 0 <= (current_minutes - target_minutes) < 5
+
+    def _is_risk_check_time(self) -> bool:
+        """Check if it's time for an intraday risk check."""
+        if self._last_risk_check is None:
+            return True
+
+        hours = trading_config.risk_check_interval_hours
+        elapsed = (datetime.now() - self._last_risk_check).total_seconds() / 3600
+        return elapsed >= hours
 
     def _check_paper_trades(self) -> int:
         """
-        Check open paper trades against current prices.
-        Close any that hit stop loss or take profit.
-
-        Returns:
-            Number of paper trades closed
+        Check open paper trades — ATR trailing stops only (no TP).
+        Returns number of trades closed.
         """
         open_trades = self.db.get_open_paper_trades()
         if not open_trades:
@@ -119,72 +128,58 @@ class TradingBot:
             trade_id = trade['id']
             entry_price = trade['entry_price']
             stop_loss = trade['stop_loss']
-            take_profit = trade['take_profit']
+            is_long = trade['action'] == 'BUY'
+
+            # Check minimum hold period
+            min_exit_date = trade.get('min_exit_date')
+            if min_exit_date:
+                min_dt = datetime.fromisoformat(min_exit_date)
+                if datetime.now() < min_dt:
+                    logger.info(f"  #{trade_id} {symbol}: Min hold until {min_dt.strftime('%Y-%m-%d')}")
+                    continue
 
             # Get current price
             try:
                 df = self.engine.fetcher.get_historical_data(
-                    symbol, duration="1 D", bar_size="1 min"
+                    symbol, duration="5 D", bar_size="1 day"
                 )
                 if df is None or df.empty:
                     continue
-
                 current_price = float(df['close'].iloc[-1])
             except Exception as e:
                 logger.warning(f"Could not get price for {symbol}: {e}")
                 continue
 
-            # Determine if this is a long (BUY) or short (SELL) position
-            is_long = trade['action'] == 'BUY'
-
-            # Trailing stop logic: lock in profits as price moves favourably
-            use_trailing = getattr(self.engine.config, 'use_trailing_stop', False)
-            if use_trailing and stop_loss:
-                activation_pct = getattr(self.engine.config, 'trailing_activation_pct', 0.01)
-                trail_pct = getattr(self.engine.config, 'trailing_stop_pct', 0.015)
-
-                # Get or initialise best_price (defaults to entry if not yet tracked)
+            # ATR trailing stop logic
+            if stop_loss:
                 best_price = trade.get('best_price') or entry_price
 
-                # Update best_price if current price is more favourable
+                # Update best price
                 if is_long:
                     best_price = max(best_price, current_price)
                 else:
                     best_price = min(best_price, current_price)
 
-                # Check if profit threshold met to activate trailing
-                if is_long:
-                    profit_pct = (best_price - entry_price) / entry_price
-                else:
-                    profit_pct = (entry_price - best_price) / entry_price
-
-                if profit_pct >= activation_pct:
-                    # Calculate new trailing stop
-                    if is_long:
-                        new_sl = round(best_price * (1 - trail_pct), 2)
-                        # Only tighten — never loosen the stop
-                        if new_sl > stop_loss:
-                            logger.info(f"  #{trade_id} {symbol}: Trailing stop ${stop_loss:.2f} -> ${new_sl:.2f} (best: ${best_price:.2f})")
-                            stop_loss = new_sl
-                            self.db.update_paper_trade_stop(trade_id, new_sl, best_price)
+                # Compute new trailing stop from ATR
+                from .indicators import atr as compute_atr
+                if len(df) >= 20:
+                    atr_val = compute_atr(df['high'], df['low'], df['close'], period=20).iloc[-1]
+                    if not pd.isna(atr_val) and atr_val > 0:
+                        multiplier = trading_config.atr_stop_multiplier
+                        if is_long:
+                            new_sl = round(best_price - multiplier * atr_val, 2)
+                            if new_sl > stop_loss:
+                                logger.info(f"  #{trade_id} {symbol}: Trail ${stop_loss:.2f} -> ${new_sl:.2f} (best ${best_price:.2f})")
+                                stop_loss = new_sl
                         else:
-                            self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
-                    else:
-                        new_sl = round(best_price * (1 + trail_pct), 2)
-                        # Only tighten — for shorts, tighter means lower
-                        if new_sl < stop_loss:
-                            logger.info(f"  #{trade_id} {symbol}: Trailing stop ${stop_loss:.2f} -> ${new_sl:.2f} (best: ${best_price:.2f})")
-                            stop_loss = new_sl
-                            self.db.update_paper_trade_stop(trade_id, new_sl, best_price)
-                        else:
-                            self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
-                else:
-                    # Not yet activated — just track the best price
-                    self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
+                            new_sl = round(best_price + multiplier * atr_val, 2)
+                            if new_sl < stop_loss:
+                                logger.info(f"  #{trade_id} {symbol}: Trail ${stop_loss:.2f} -> ${new_sl:.2f} (best ${best_price:.2f})")
+                                stop_loss = new_sl
 
-            # Check stop loss
-            # Long: SL hit when price drops BELOW stop_loss
-            # Short: SL hit when price rises ABOVE stop_loss
+                self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
+
+            # Check stop loss hit
             sl_hit = False
             if stop_loss:
                 if is_long and current_price <= stop_loss:
@@ -196,75 +191,32 @@ class TradingBot:
                 result = self.db.close_paper_trade(trade_id, current_price, "CLOSED_SL")
                 closed_count += 1
                 direction = "LONG" if is_long else "SHORT"
-                logger.info(f"Paper trade #{trade_id} {symbol} ({direction}) hit STOP LOSS @ ${current_price:.2f}")
-
-                # SET COOLDOWN after stop loss (anti-churning from Binance strategy)
-                cooldown_mins = getattr(self.engine.config, 'cooldown_minutes', 20)
-                self.db.set_symbol_cooldown(symbol, cooldown_mins, "stop_loss")
-                logger.info(f"  {symbol} in cooldown for {cooldown_mins} minutes")
+                logger.info(f"Paper trade #{trade_id} {symbol} ({direction}) hit TRAILING STOP @ ${current_price:.2f}")
 
                 if self.notifier and self.notifier.enabled:
                     self.notifier.notify_paper_trade_closed(
-                        trade_id=trade_id,
-                        symbol=symbol,
-                        action=trade['action'],
-                        quantity=trade['quantity'],
-                        entry_price=entry_price,
+                        trade_id=trade_id, symbol=symbol, action=trade['action'],
+                        quantity=trade['quantity'], entry_price=entry_price,
                         exit_price=current_price,
                         pnl_amount=result['pnl_amount'],
                         pnl_percent=result['pnl_percent'],
                         exit_reason="CLOSED_SL",
                     )
 
-            # Check take profit
-            # Long: TP hit when price rises ABOVE take_profit
-            # Short: TP hit when price drops BELOW take_profit
-            tp_hit = False
-            if take_profit and not sl_hit:
-                if is_long and current_price >= take_profit:
-                    tp_hit = True
-                elif not is_long and current_price <= take_profit:
-                    tp_hit = True
-
-            if tp_hit:
-                result = self.db.close_paper_trade(trade_id, current_price, "CLOSED_TP")
-                closed_count += 1
-                direction = "LONG" if is_long else "SHORT"
-                logger.info(f"Paper trade #{trade_id} {symbol} ({direction}) hit TAKE PROFIT @ ${current_price:.2f}")
-
-                if self.notifier and self.notifier.enabled:
-                    self.notifier.notify_paper_trade_closed(
-                        trade_id=trade_id,
-                        symbol=symbol,
-                        action=trade['action'],
-                        quantity=trade['quantity'],
-                        entry_price=entry_price,
-                        exit_price=current_price,
-                        pnl_amount=result['pnl_amount'],
-                        pnl_percent=result['pnl_percent'],
-                        exit_reason="CLOSED_TP",
-                    )
-
-            self.connection.ib.sleep(0.5)  # Rate limiting
+            self.connection.ib.sleep(0.5)
 
         return closed_count
 
     def _send_daily_summary(self):
-        """Send daily summary at market close if not already sent."""
+        """Send daily summary at market close."""
         today = datetime.now(self.US_EASTERN).strftime('%Y-%m-%d')
-
-        # Only send once per day
         if self._last_summary_date == today:
             return
 
-        # Get stats from database
         stats = self.db.get_paper_trade_stats()
-
         if stats['total_trades'] == 0:
-            return  # No trades to report
+            return
 
-        # Calculate today's stats (would need to enhance DB for this)
-        # For now, send overall stats
         if self.notifier and self.notifier.enabled:
             self.notifier.notify_daily_summary(
                 date=today,
@@ -272,64 +224,51 @@ class TradingBot:
                 trades_closed=stats['closed_trades'],
                 winning_trades=stats['winning_trades'],
                 losing_trades=stats['losing_trades'],
-                day_pnl=stats['total_pnl'],  # Would be day-specific ideally
+                day_pnl=stats['total_pnl'],
                 total_pnl=stats['total_pnl'],
                 win_rate=stats['win_rate'],
             )
             self._last_summary_date = today
-            logger.info("Daily summary sent")
 
     def connect(self) -> bool:
-        """Establish connection to IBKR."""
         logger.info("Connecting to IBKR...")
         return self.connection.connect()
 
     def disconnect(self):
-        """Disconnect from IBKR."""
         logger.info("Disconnecting from IBKR...")
         self.connection.disconnect()
 
     def run_once(self) -> dict:
-        """
-        Run a single analysis/trading cycle.
-
-        Returns:
-            Dict with results summary
-        """
+        """Run a single analysis/rebalance cycle."""
         if not self.connection.ensure_connected():
             logger.error("Failed to connect to IBKR")
             self._consecutive_failures += 1
-
-            # Send alert after threshold consecutive failures (once per day max)
             today = datetime.now().strftime('%Y-%m-%d')
             if (self._consecutive_failures >= self._failure_alert_threshold
-                and self._last_failure_alert != today):
+                    and self._last_failure_alert != today):
                 if self.notifier and self.notifier.enabled:
                     self.notifier.notify_error(
-                        f"Connection failed {self._consecutive_failures} consecutive times. "
-                        f"Check IB Gateway status.",
-                        "Connection"
+                        f"Connection failed {self._consecutive_failures} consecutive times.",
+                        "Connection",
                     )
                 self._last_failure_alert = today
-                logger.warning(f"Sent connection failure alert (attempt #{self._consecutive_failures})")
-
             return {"success": False, "error": "Connection failed"}
 
-        # Reset failure counter on successful connection
         self._consecutive_failures = 0
 
         logger.info("=" * 50)
-        logger.info(f"TRADING BOT RUN - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"TREND-FOLLOWING BOT - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Mode: {'DRY RUN' if self.dry_run else 'LIVE TRADING'}")
         logger.info("=" * 50)
 
-        # Check existing paper trades first (in dry run mode)
+        # Check trailing stops on existing positions
         if self.dry_run:
+            import pandas as pd  # needed for pd.isna in _check_paper_trades
             closed_count = self._check_paper_trades()
             if closed_count > 0:
-                logger.info(f"Closed {closed_count} paper trades")
+                logger.info(f"Closed {closed_count} paper trades (trailing stop)")
 
-        # Run analysis
+        # Run signal analysis and generate rebalance opportunities
         opportunities = self.engine.run_analysis()
 
         results = {
@@ -342,73 +281,31 @@ class TradingBot:
             "opportunities_detail": [],
         }
 
-        # Log opportunities
         for opp in opportunities:
             detail = {
                 "symbol": opp.symbol,
                 "decision": opp.decision.value,
                 "price": opp.current_price,
                 "size": opp.position_size,
-                "strength": opp.signal.strength,
+                "signal": opp.signal_score,
                 "reasons": opp.reasons,
                 "stop_loss": opp.stop_loss_price,
-                "take_profit": opp.take_profit_price,
             }
             results["opportunities_detail"].append(detail)
 
             logger.info(
-                f"Opportunity: {opp.decision.value} {opp.position_size} {opp.symbol} "
-                f"@ ${opp.current_price:.2f} ({opp.signal.strength:.0%})"
+                f"Rebalance: {opp.decision.value} {opp.position_size} {opp.symbol} "
+                f"@ ${opp.current_price:.2f} (signal {opp.signal_score:+.2f})"
             )
-            if opp.stop_loss_price:
-                logger.info(f"  Stop Loss: ${opp.stop_loss_price:.2f}")
-            if opp.take_profit_price:
-                logger.info(f"  Take Profit: ${opp.take_profit_price:.2f}")
 
-            # In dry run mode, save as paper trade for tracking
+            # In dry run: open paper trades
             if self.dry_run:
-                # Check market condition - don't trade if SPY is weak
-                if not self.engine.state.market_ok:
-                    logger.info(f"  Skipping {opp.symbol} - {self.engine.state.market_reason}")
-                    continue
-
-                # Check early-open cooldown - no new trades in first N minutes
-                open_delay = getattr(trading_config, 'first_entry_minutes_after_open', 0)
-                if open_delay > 0:
-                    now_et = datetime.now(self.US_EASTERN)
-                    open_dt = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-                    mins_since_open = (now_et - open_dt).total_seconds() / 60
-                    if 0 <= mins_since_open < open_delay:
-                        logger.info(f"  Skipping {opp.symbol} - {int(open_delay - mins_since_open)}min left in open cooldown ({open_delay}min)")
-                        continue
-
-                # Check late-entry cutoff - no new trades near market close
-                cutoff_mins = getattr(trading_config, 'last_entry_minutes_before_close', 0)
-                if cutoff_mins > 0:
-                    now_et = datetime.now(self.US_EASTERN)
-                    close_dt = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-                    mins_to_close = (close_dt - now_et).total_seconds() / 60
-                    if 0 < mins_to_close <= cutoff_mins:
-                        logger.info(f"  Skipping {opp.symbol} - {int(mins_to_close)}min to close (cutoff {cutoff_mins}min)")
-                        continue
-
-                # Check max open positions limit
+                # Check max open positions
                 open_trades = self.db.get_open_paper_trades()
-                if len(open_trades) >= trading_config.max_open_positions:
-                    logger.info(f"  Skipping {opp.symbol} - max open positions ({trading_config.max_open_positions}) reached")
+                if len(open_trades) >= self.config_max_positions:
+                    logger.info(f"  Skipping {opp.symbol} — max positions reached")
                     continue
 
-                # Check per-sector trade limit
-                max_per_sector = getattr(trading_config, 'max_trades_per_sector', 2)
-                sector = self.engine._get_sector(opp.symbol)
-                if sector and open_trades:
-                    sector_symbols = trading_config.symbols.get(sector, [])
-                    sector_open = sum(1 for t in open_trades if t['symbol'] in sector_symbols)
-                    if sector_open >= max_per_sector:
-                        logger.info(f"  Skipping {opp.symbol} - sector '{sector}' already has {sector_open} open trades (max {max_per_sector})")
-                        continue
-
-                # Only open paper trade if we don't already have one for this symbol
                 if not self.db.has_open_paper_trade(opp.symbol):
                     trade_id = self.db.save_paper_trade(
                         symbol=opp.symbol,
@@ -416,97 +313,66 @@ class TradingBot:
                         quantity=opp.position_size,
                         entry_price=opp.current_price,
                         stop_loss=opp.stop_loss_price,
-                        take_profit=opp.take_profit_price,
+                        take_profit=None,
                         reasons=opp.reasons,
+                        signal_score=opp.signal_score,
+                        min_hold_days=trading_config.min_hold_days,
                     )
 
-                    # Increment daily trade count for this symbol (anti-churning)
-                    self.db.increment_daily_trade_count(opp.symbol)
-
-                    # Send paper trade opened notification
                     if self.notifier and self.notifier.enabled:
                         self.notifier.notify_paper_trade_opened(
-                            trade_id=trade_id,
-                            symbol=opp.symbol,
+                            trade_id=trade_id, symbol=opp.symbol,
                             action=opp.decision.value,
                             quantity=opp.position_size,
                             entry_price=opp.current_price,
                             stop_loss=opp.stop_loss_price,
-                            take_profit=opp.take_profit_price,
+                            take_profit=None,
                         )
                 else:
-                    logger.info(f"  Skipping {opp.symbol} - already have open paper trade")
-                    # Still send opportunity notification
-                    if self.notifier and self.notifier.enabled:
-                        self.notifier.notify_trade_opportunity(
-                            symbol=opp.symbol,
-                            action=opp.decision.value,
-                            quantity=opp.position_size,
-                            price=opp.current_price,
-                            confidence=opp.signal.strength,
-                            stop_loss=opp.stop_loss_price,
-                            take_profit=opp.take_profit_price,
-                            reasons=opp.reasons,
-                        )
-            else:
-                # In live mode, just send opportunity notification
-                if self.notifier and self.notifier.enabled:
-                    self.notifier.notify_trade_opportunity(
-                        symbol=opp.symbol,
-                        action=opp.decision.value,
-                        quantity=opp.position_size,
-                        price=opp.current_price,
-                        confidence=opp.signal.strength,
-                        stop_loss=opp.stop_loss_price,
-                        take_profit=opp.take_profit_price,
-                        reasons=opp.reasons,
-                    )
+                    logger.info(f"  Skipping {opp.symbol} — already have open trade")
 
-        # Execute if not dry run
+        # Execute if live
         if not self.dry_run and opportunities:
-            logger.info("Executing trades...")
-            order_results = []
             for opp in opportunities:
                 result = self.engine.execute_opportunity(opp)
-                order_results.append(result)
                 if result.success:
                     results["trades_executed"] += 1
-                    # Notify trade execution
-                    if self.notifier and self.notifier.enabled:
-                        self.notifier.notify_trade_executed(
-                            symbol=opp.symbol,
-                            action=opp.decision.value,
-                            quantity=opp.position_size,
-                            price=result.fill_price or opp.current_price,
-                            reason=", ".join(opp.reasons[:2]),
-                        )
 
-        # Send analysis complete notification
+        # Send analysis notification
         if self.notifier and self.notifier.enabled:
-            # If market was weak but we found opportunities, send special notification
-            if not self.engine.state.market_ok and opportunities:
-                self.notifier.notify_market_blocked(
-                    opportunities=opportunities,
-                    market_reason=self.engine.state.market_reason,
-                    symbols_analyzed=results["symbols_analyzed"],
-                )
-            else:
-                self.notifier.notify_analysis_complete(
-                    symbols_analyzed=results["symbols_analyzed"],
-                    opportunities=results["opportunities"],
-                    trades_executed=results["trades_executed"],
-                    dry_run=self.dry_run,
-                )
+            self.notifier.notify_analysis_complete(
+                symbols_analyzed=results["symbols_analyzed"],
+                opportunities=results["opportunities"],
+                trades_executed=results["trades_executed"],
+                dry_run=self.dry_run,
+            )
 
-        # Status report
         logger.info("\n" + self.engine.get_status_report())
-
         return results
 
+    @property
+    def config_max_positions(self) -> int:
+        return trading_config.max_open_positions
+
+    def run_risk_check(self):
+        """Run intraday risk check (trailing stops only, no new signals)."""
+        if not self.connection.ensure_connected():
+            return
+
+        logger.info("--- Intraday risk check ---")
+
+        if self.dry_run:
+            import pandas as pd
+            closed = self._check_paper_trades()
+            if closed > 0:
+                logger.info(f"Risk check closed {closed} trades")
+            else:
+                logger.info("Risk check: all positions OK")
+
+        self._last_risk_check = datetime.now()
+
     def run_scheduled(self):
-        """
-        Run the bot on a schedule until stopped.
-        """
+        """Run the bot on a schedule until stopped."""
         self.running = True
 
         if not self.connect():
@@ -516,52 +382,54 @@ class TradingBot:
             return
 
         mode = "DRY RUN" if self.dry_run else "LIVE TRADING"
-        logger.info(f"Bot started - running every {self.run_interval // 60} minutes")
-        logger.info(f"Mode: {mode}")
-        logger.info("Press Ctrl+C to stop")
+        strategy = "TREND-FOLLOWING"
+        logger.info(f"Bot started — {strategy} mode: {mode}")
+        logger.info(f"Rebalance: {trading_config.rebalance_hour}:{trading_config.rebalance_minute:02d} ET daily")
+        logger.info(f"Risk checks: every {trading_config.risk_check_interval_hours}h")
 
-        # Send startup notification
         if self.notifier and self.notifier.enabled:
-            self.notifier.notify_bot_started(mode)
+            self.notifier.notify_bot_started(f"{mode} — {strategy}")
 
         try:
             while self.running:
                 now_et = datetime.now(self.US_EASTERN)
 
-                # Check if near market close (3:55 PM ET) - send daily summary
+                # Daily summary near close
                 if now_et.hour == 15 and now_et.minute >= 55:
                     self._send_daily_summary()
 
-                # Check market hours - skip everything if outside hours
-                # This prevents reconnection attempts during weekends/after hours
+                # Outside market hours — just check Telegram commands
                 if not self._is_market_hours():
                     logger.info("Outside market hours, waiting...")
-                    # Reset failure counter - don't alert for off-hours issues
                     self._consecutive_failures = 0
-                    # Still check for Telegram commands while waiting (no price fetcher outside hours)
                     check_telegram_commands(self.db, None)
-                    time.sleep(60)  # Check every minute
+                    time.sleep(60)
                     continue
 
-                # Run analysis
-                self.run_once()
+                # Daily rebalance window
+                if self._is_rebalance_time():
+                    logger.info("=== DAILY REBALANCE ===")
+                    self.run_once()
+                    self._last_rebalance_date = now_et.strftime('%Y-%m-%d')
+                    self._last_risk_check = datetime.now()
 
-                # Create price fetcher for telegram commands (connection should be active)
+                # Intraday risk check
+                elif self._is_risk_check_time():
+                    self.run_risk_check()
+
+                # Build price fetcher for Telegram commands
                 def get_prices(symbols):
                     if self.engine and self.engine.fetcher and self.connection.ensure_connected():
                         return self.engine.fetcher.get_latest_prices(symbols)
                     return {}
 
-                # Wait for next run, checking for Telegram commands periodically
-                if self.running:
-                    logger.info(f"Next run in {self.run_interval // 60} minutes...")
-                    for i in range(self.run_interval):
-                        if not self.running:
-                            break
-                        # Check for Telegram commands every 5 seconds
-                        if i % 5 == 0:
-                            check_telegram_commands(self.db, get_prices)
-                        time.sleep(1)
+                # Wait, checking Telegram periodically
+                for i in range(60):  # Check every minute
+                    if not self.running:
+                        break
+                    if i % 5 == 0:
+                        check_telegram_commands(self.db, get_prices)
+                    time.sleep(1)
 
         except Exception as e:
             logger.error(f"Bot error: {e}")
@@ -577,17 +445,13 @@ class TradingBot:
 def setup_logging(level: int = logging.INFO, log_file: Optional[str] = None):
     """Configure logging for the bot."""
     handlers = [logging.StreamHandler(sys.stdout)]
-
     if log_file:
         handlers.append(logging.FileHandler(log_file))
-
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=handlers,
     )
-
-    # Reduce noise from ib_insync
     logging.getLogger("ib_insync").setLevel(logging.WARNING)
 
 
@@ -595,36 +459,16 @@ def main():
     """Main entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="IBKR Trading Bot")
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help="Run in live mode (actually execute trades)",
-    )
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run once and exit (don't schedule)",
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=60,
-        help="Minutes between runs (default: 60)",
-    )
-    parser.add_argument(
-        "--log-file",
-        type=str,
-        default="logs/trading.log",
-        help="Log file path",
-    )
+    parser = argparse.ArgumentParser(description="IBKR Trend-Following Bot")
+    parser.add_argument("--live", action="store_true", help="Run in live mode")
+    parser.add_argument("--once", action="store_true", help="Run once and exit")
+    parser.add_argument("--interval", type=int, default=60, help="Minutes between checks (default: 60)")
+    parser.add_argument("--log-file", type=str, default="logs/trading.log", help="Log file path")
 
     args = parser.parse_args()
-
     setup_logging(log_file=args.log_file)
 
     dry_run = not args.live
-
     if args.live:
         logger.warning("=" * 50)
         logger.warning("LIVE TRADING MODE - REAL ORDERS WILL BE PLACED")
