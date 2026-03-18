@@ -402,8 +402,11 @@ class TradingBot:
                 if not self._is_market_hours():
                     logger.info("Outside market hours, waiting...")
                     self._consecutive_failures = 0
-                    check_telegram_commands(self.db, None)
-                    time.sleep(60)
+                    for _ in range(20):  # 20 × 3s = 60s between log lines
+                        if not self.running:
+                            break
+                        check_telegram_commands(self.db, None)
+                        time.sleep(3)
                     continue
 
                 # Daily rebalance window
@@ -423,13 +426,12 @@ class TradingBot:
                         return self.engine.fetcher.get_latest_prices(symbols)
                     return {}
 
-                # Wait, checking Telegram periodically
-                for i in range(60):  # Check every minute
+                # Wait, checking Telegram every 3 seconds
+                for _ in range(20):  # 20 × 3s = 60s
                     if not self.running:
                         break
-                    if i % 5 == 0:
-                        check_telegram_commands(self.db, get_prices)
-                    time.sleep(1)
+                    check_telegram_commands(self.db, get_prices)
+                    time.sleep(3)
 
         except Exception as e:
             logger.error(f"Bot error: {e}")
