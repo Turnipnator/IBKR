@@ -118,17 +118,23 @@ class TrendFollowingAnalyzer:
             Tuple of (signal score from -1.0 to +1.0, list of reasons)
         """
         close = self.df['close']
-        if len(close) < max(self.lookbacks) + 1:
+        # Need at least enough data for the shortest lookback
+        if len(close) < min(self.lookbacks) + 2:
             return 0.0, ["Insufficient data for TSMOM"]
 
         weights = [0.3, 0.3, 0.4]  # short, medium, long
         signals = []
         reasons = []
+        active_weight_total = 0.0
 
         for lookback, weight in zip(self.lookbacks, weights):
+            if len(close) < lookback + 2:
+                # Not enough data for this lookback — use max available
+                lookback = len(close) - 2
             ret = total_return(close, lookback)
             sig = np.sign(ret)
             signals.append(sig * weight)
+            active_weight_total += weight
 
             period_name = {21: "1M", 63: "3M", 252: "12M"}.get(lookback, f"{lookback}d")
             direction = "up" if ret > 0 else "down"
