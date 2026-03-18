@@ -597,22 +597,30 @@ Bot is now monitoring the market.
 
                     pnl_sign = "+" if pnl_pct >= 0 else ""
 
-                    # Distance to SL and TP from current price
+                    # Distance to SL from current price
                     to_sl = ((current - sl) / current * 100) if sl else 0
-                    to_tp = ((tp - current) / current * 100) if tp else 0
+
+                    sl_text = f"SL ${sl:.2f} ({to_sl:.1f}% away)" if sl else "SL: N/A"
+                    if tp:
+                        to_tp = ((tp - current) / current * 100)
+                        tp_text = f" | TP ${tp:.2f} ({to_tp:.1f}% away)"
+                    else:
+                        tp_text = " | TP: trailing"
 
                     lines.append(
                         f"\n<b>{symbol}</b> {emoji} {pnl_sign}{pnl_pct:.2f}%\n"
                         f"  ${entry:.2f} \u2192 ${current:.2f}\n"
-                        f"  SL ${sl:.2f} ({to_sl:.1f}% away) | TP ${tp:.2f} ({to_tp:.1f}% away)"
+                        f"  {sl_text}{tp_text}"
                     )
                 else:
                     # No current price - show entry and targets
                     total_current_value += entry_value
+                    sl_text = f"${sl:.2f}" if sl else "N/A"
+                    tp_text = f"${tp:.2f}" if tp else "trailing"
                     lines.append(
                         f"\n<b>{symbol}</b> (no live price)\n"
                         f"  Entry: ${entry:.2f}\n"
-                        f"  SL: ${sl:.2f} | TP: ${tp:.2f}"
+                        f"  SL: {sl_text} | TP: {tp_text}"
                     )
 
             # Summary
