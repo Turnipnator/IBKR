@@ -130,13 +130,13 @@ class TradingBot:
             stop_loss = trade['stop_loss']
             is_long = trade['action'] == 'BUY'
 
-            # Check minimum hold period
+            # Check minimum hold period (still track prices and tighten stops)
+            in_min_hold = False
             min_exit_date = trade.get('min_exit_date')
             if min_exit_date:
                 min_dt = datetime.fromisoformat(min_exit_date)
                 if datetime.now() < min_dt:
-                    logger.info(f"  #{trade_id} {symbol}: Min hold until {min_dt.strftime('%Y-%m-%d')}")
-                    continue
+                    in_min_hold = True
 
             # Get current price
             try:
@@ -179,7 +179,10 @@ class TradingBot:
 
                 self.db.update_paper_trade_stop(trade_id, stop_loss, best_price)
 
-            # Check stop loss hit
+                if in_min_hold:
+                    logger.info(f"  #{trade_id} {symbol}: Min hold (tracking ${current_price:.2f}, stop ${stop_loss:.2f})")
+
+            # Check stop loss hit (always enforced, even during min hold)
             sl_hit = False
             if stop_loss:
                 if is_long and current_price <= stop_loss:
