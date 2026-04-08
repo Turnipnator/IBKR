@@ -554,14 +554,23 @@ Bot is now monitoring the market.
 
             # Fetch current prices if price_fetcher available
             current_prices = {}
+            disconnected = False
             if price_fetcher:
                 symbols = [t['symbol'] for t in trades]
                 try:
                     current_prices = price_fetcher(symbols)
+                    if not current_prices:
+                        disconnected = True
                 except Exception as e:
                     logger.warning(f"Could not fetch current prices: {e}")
+                    disconnected = True
 
-            lines = [f"\U0001F4CB <b>Open Positions</b> ({len(trades)})\n"]
+            lines = []
+            if disconnected:
+                lines.append(
+                    "\U0001F6A8 <b>IBKR disconnected</b> - showing positions without live prices.\n"
+                )
+            lines.append(f"\U0001F4CB <b>Open Positions</b> ({len(trades)})\n")
             total_entry_value = 0
             total_current_value = 0
             total_pnl = 0

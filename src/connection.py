@@ -42,6 +42,7 @@ class ConnectionManager:
         self._reconnect_delay = 5  # seconds
         self._on_connect_callbacks: list[Callable] = []
         self._on_disconnect_callbacks: list[Callable] = []
+        self._on_reconnect_failed_callbacks: list[Callable] = []
 
         # Set up disconnect handler
         self.ib.disconnectedEvent += self._on_disconnect
@@ -131,11 +132,22 @@ class ConnectionManager:
         logger.error(
             f"Failed to reconnect after {self._max_reconnect_attempts} attempts"
         )
+
+        # Fire reconnect-failed callbacks (e.g. gateway restart)
+        for callback in self._on_reconnect_failed_callbacks:
+            try:
+                callback()
+            except Exception as e:
+                logger.error(f"Error in reconnect-failed callback: {e}")
+
         return False
 
     def ensure_connected(self) -> bool:
         """
         Ensure connection is active, reconnecting if necessary.
+
+        If reconnection fails and a gateway restart callback triggers,
+        retries one more round after the restart.
 
         Returns:
             True if connected (or reconnected), False otherwise.
@@ -145,7 +157,17 @@ class ConnectionManager:
 
         logger.warning("Connection lost, attempting to reconnect...")
         self._reconnect_attempts = 0
-        return self.reconnect()
+        if self.reconnect():
+            return True
+
+        # reconnect() failed and fired on_reconnect_failed callbacks
+        # (which may have restarted the gateway). Try one more round.
+        if self._on_reconnect_failed_callbacks:
+            logger.info("Retrying connection after gateway restart...")
+            self._reconnect_attempts = 0
+            return self.reconnect()
+
+        return False
 
     def _on_disconnect(self):
         """Handle disconnect event."""
@@ -165,6 +187,10 @@ class ConnectionManager:
     def on_disconnect(self, callback: Callable):
         """Register a callback for disconnection events."""
         self._on_disconnect_callbacks.append(callback)
+
+    def on_reconnect_failed(self, callback: Callable):
+        """Register a callback for when all reconnection attempts are exhausted."""
+        self._on_reconnect_failed_callbacks.append(callback)
 
     @property
     def is_connected(self) -> bool:

@@ -22,6 +22,7 @@ from .engine import DecisionEngine
 from .database import Database
 from .config import ibkr_config, telegram_config, trading_config
 from .telegram_bot import TelegramNotifier, get_notifier, check_telegram_commands
+from .gateway_monitor import GatewayMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,12 @@ class TradingBot:
         self._last_rebalance_date: Optional[str] = None
         self._last_risk_check: Optional[datetime] = None
         self._consecutive_failures = 0
-        self._failure_alert_threshold = 3
+        self._failure_alert_threshold = 1
         self._last_failure_alert: Optional[str] = None
+
+        # Gateway auto-restart on connection failure
+        self.gateway_monitor = GatewayMonitor(notifier=self.notifier)
+        self.connection.on_reconnect_failed(self.gateway_monitor.restart_gateway)
 
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
