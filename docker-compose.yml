@@ -38,6 +38,10 @@ services:
     depends_on:
       ib-gateway:
         condition: service_healthy
+    # Grant access to Docker socket (owned by root:docker, GID 988 on host)
+    # so the bot can restart ib-gateway on connection failure
+    group_add:
+      - "${DOCKER_GID:-988}"
     environment:
       # IBKR Connection (connect via localhost since using host network)
       IBKR_HOST: 127.0.0.1
@@ -52,7 +56,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     command: ["python", "-m", "src.bot", "--interval", "60"]
 
   # Daily Instrument Screener - runs at 14:00 UTC Mon-Fri
