@@ -92,9 +92,10 @@ class GatewayMonitor:
 
         try:
             # Docker API: POST /containers/{id}/restart?t=30  (30s grace period)
+            # No version prefix = use server default (avoids version-mismatch errors)
             status, body = self._docker_api(
                 "POST",
-                f"/v1.24/containers/{GATEWAY_CONTAINER}/restart?t=30",
+                f"/containers/{GATEWAY_CONTAINER}/restart?t=30",
             )
 
             if status == 204:

@@ -45,7 +45,7 @@ class TestGatewayMonitor:
         assert result is True
         assert monitor.restarts_today == 1
         mock_conn.request.assert_called_once_with(
-            "POST", f"/v1.24/containers/ib-gateway/restart?t=30"
+            "POST", "/containers/ib-gateway/restart?t=30"
         )
         mock_sleep.assert_called_once()
 
