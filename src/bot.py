@@ -23,6 +23,7 @@ from .database import Database
 from .config import ibkr_config, telegram_config, trading_config
 from .telegram_bot import TelegramNotifier, get_notifier, check_telegram_commands
 from .gateway_monitor import GatewayMonitor
+from .data_health_checker import DataHealthChecker
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,13 @@ class TradingBot:
         # Gateway auto-restart on connection failure
         self.gateway_monitor = GatewayMonitor(notifier=self.notifier)
         self.connection.on_reconnect_failed(self.gateway_monitor.restart_gateway)
+
+        # Data-farm health probe (catches "TCP up but data farm dead")
+        self.data_health = DataHealthChecker(
+            connection=self.connection,
+            gateway_monitor=self.gateway_monitor,
+            notifier=self.notifier,
+        )
 
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -416,6 +424,11 @@ class TradingBot:
                         check_telegram_commands(self.db, None)
                         time.sleep(3)
                     continue
+
+                # Data-farm health probe (runs every 5 min; auto-restarts
+                # gateway if SPY data requests time out)
+                if self.data_health.should_probe():
+                    self.data_health.check_and_heal()
 
                 # Daily rebalance window
                 if self._is_rebalance_time():
