@@ -90,11 +90,15 @@ class DataHealthChecker:
             )
 
             if bars and len(bars) > 0:
+                last_close = getattr(bars[-1], "close", None)
                 if self._consecutive_failures > 0:
                     logger.info(
                         f"Data probe recovered after "
-                        f"{self._consecutive_failures} failures"
+                        f"{self._consecutive_failures} failures "
+                        f"(SPY close ${last_close})"
                     )
+                else:
+                    logger.info(f"Data probe OK (SPY close ${last_close})")
                 self._consecutive_failures = 0
                 return True
 
