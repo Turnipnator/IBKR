@@ -349,7 +349,14 @@ class TradingBot:
 
         # Execute if live
         if not self.dry_run and opportunities:
+            current_positions = {
+                p.symbol for p in self.engine.position_manager.get_positions()
+                if p.quantity != 0
+            }
             for opp in opportunities:
+                if opp.symbol in current_positions:
+                    logger.info(f"  Skipping {opp.symbol} — already holding")
+                    continue
                 result = self.engine.execute_opportunity(opp)
                 if result.success:
                     results["trades_executed"] += 1

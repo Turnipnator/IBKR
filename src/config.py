@@ -88,21 +88,21 @@ class TradingConfig:
     lookback_long: int = 252       # 12-month lookback
     tsmom_weight: float = 0.6      # Weight for time-series momentum
     csmom_weight: float = 0.4      # Weight for cross-sectional momentum
-    signal_threshold: float = 0.3  # Min |signal| to trade (0.3 = 2 of 3 timeframes agree)
+    signal_threshold: float = 0.5  # Min |signal| to trade (0.5 = strong conviction, reduces turnover at small capital)
 
     # Position sizing - volatility-scaled (inverse ATR)
     atr_period: int = 20           # ATR lookback for volatility
     atr_stop_multiplier: float = 3.0  # Trailing stop = 3x ATR from peak
     risk_budget: float = 0.20      # Target 20% annualised portfolio volatility
-    max_position_pct: float = 0.05 # Max 5% of equity per position
-    max_asset_class_pct: float = 0.25  # Max 25% in any asset class
-    max_gross_exposure: float = 1.5    # Max 150% gross exposure
+    max_position_pct: float = 0.15 # Max 15% of equity per position (sized for £10k with top-N concentration)
+    max_asset_class_pct: float = 0.40  # Max 40% in any asset class
+    max_gross_exposure: float = 1.0    # No leverage — cash account
 
     # Risk management
     min_hold_days: int = 5         # Minimum hold period to prevent whipsaws
     drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
     drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
-    max_daily_loss: float = 30000.0    # Daily loss limit (3% of $1M)
+    max_daily_loss: float = 300.0      # Daily loss limit (3% of £10k)
 
     # Shorting
     enable_shorting: bool = False   # Start long-only, add shorts later
@@ -116,8 +116,8 @@ class TradingConfig:
     rebalance_minute: int = 30
     risk_check_interval_hours: int = 4  # Check trailing stops every 4 hours
 
-    # Max open positions (all instruments could be active)
-    max_open_positions: int = 30
+    # Max open positions — top-N by signal strength (enforced in engine._calculate_target_positions)
+    max_open_positions: int = 8
 
 
 @dataclass

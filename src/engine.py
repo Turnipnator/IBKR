@@ -216,6 +216,18 @@ class DecisionEngine:
             logger.info("No signals above threshold — all flat")
             return targets
 
+        # Rank by signal strength and cap to max_open_positions
+        total_active = len(active_signals)
+        sorted_signals = sorted(
+            active_signals.items(),
+            key=lambda x: abs(x[1]["combined"]),
+            reverse=True,
+        )
+        active_signals = dict(sorted_signals[:self.config.max_open_positions])
+        logger.info(
+            f"Active signals: {total_active}, trading top {len(active_signals)}"
+        )
+
         # Count active positions for risk budget distribution
         num_active = len(active_signals)
         risk_per_position = (net_liq * self.config.risk_budget) / num_active
@@ -512,12 +524,27 @@ class DecisionEngine:
             OrderAction.BUY if opportunity.decision == TradeDecision.BUY
             else OrderAction.SELL
         )
-        return self.order_manager.place_market_order(
+        result = self.order_manager.place_market_order(
             symbol=opportunity.symbol,
             action=action,
             quantity=opportunity.position_size,
             reason=f"Trend signal: {opportunity.signal_score:+.2f}",
         )
+
+        # Attach native stop server-side so it survives bot/gateway crashes
+        if result.success and opportunity.stop_loss_price:
+            stop_action = (
+                OrderAction.SELL if action == OrderAction.BUY else OrderAction.BUY
+            )
+            self.order_manager.place_stop_order(
+                symbol=opportunity.symbol,
+                action=stop_action,
+                quantity=opportunity.position_size,
+                stop_price=opportunity.stop_loss_price,
+                reason="Initial 3xATR stop",
+            )
+
+        return result
 
     def get_status_report(self) -> str:
         """Generate a status report of current state."""
