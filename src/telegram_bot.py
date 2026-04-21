@@ -656,13 +656,31 @@ Bot is now monitoring the market.
             stats = db.get_paper_trade_stats()
 
             pnl = stats['total_pnl']
+
+            # Calculate portfolio balance from latest snapshot
+            snapshot = db.get_latest_portfolio_snapshot()
+            if snapshot:
+                balance = snapshot['equity']
+                peak = snapshot['peak_equity']
+                dd_pct = snapshot['drawdown'] * 100
+                starting = db.get_initial_equity() or balance
+                pnl = balance - starting
+                return_pct = (pnl / starting * 100) if starting > 0 else 0.0
+                realized = stats['total_pnl']
+                unrealized = pnl - realized
+            else:
+                balance = pnl  # no snapshot: can only show realized
+                peak = 0.0
+                dd_pct = 0.0
+                starting = 0.0
+                return_pct = 0.0
+                realized = pnl
+                unrealized = 0.0
+
             pnl_emoji = "\U0001F7E2" if pnl >= 0 else "\U0001F534"
             pnl_sign = "+" if pnl >= 0 else ""
-
-            # Calculate portfolio balance
-            initial_capital = 100_000.0
-            balance = initial_capital + pnl
-            return_pct = (pnl / initial_capital) * 100
+            r_sign = "+" if realized >= 0 else ""
+            u_sign = "+" if unrealized >= 0 else ""
 
             win_rate = stats['win_rate']
             if win_rate >= 60:
@@ -672,10 +690,28 @@ Bot is now monitoring the market.
             else:
                 perf_emoji = "\U0001F7E1"
 
-            return f"""\U0001F4CA <b>Paper Trading Stats</b>
+            if snapshot:
+                return f"""\U0001F4CA <b>Trading Stats</b>
 
-\U0001F4B0 <b>Balance:</b> ${balance:,.2f}
-{pnl_emoji} <b>P&L:</b> {pnl_sign}${pnl:,.2f} ({pnl_sign}{return_pct:.2f}%)
+\U0001F4B0 <b>Equity:</b> ${balance:,.2f}
+{pnl_emoji} <b>Total P&L:</b> {pnl_sign}${pnl:,.2f} ({pnl_sign}{return_pct:.2f}%)
+   Realized: {r_sign}${realized:,.2f}
+   Unrealized: {u_sign}${unrealized:,.2f}
+
+\U0001F4C9 <b>Drawdown:</b> {dd_pct:.2f}% (peak ${peak:,.0f})
+
+<b>Total Trades:</b> {stats['total_trades']}
+<b>Open:</b> {stats['open_trades']} | <b>Closed:</b> {stats['closed_trades']}
+
+<b>Winners:</b> {stats['winning_trades']} | <b>Losers:</b> {stats['losing_trades']}
+<b>Win Rate:</b> {win_rate:.1f}% {perf_emoji}
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"""
+
+            return f"""\U0001F4CA <b>Trading Stats</b>
+
+⚠️ No portfolio snapshot yet — showing realized only
+{pnl_emoji} <b>Realized P&L:</b> {pnl_sign}${realized:,.2f}
 
 <b>Total Trades:</b> {stats['total_trades']}
 <b>Open:</b> {stats['open_trades']} | <b>Closed:</b> {stats['closed_trades']}

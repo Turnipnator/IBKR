@@ -439,6 +439,38 @@ class Database:
         finally:
             conn.close()
 
+    def get_latest_portfolio_snapshot(self) -> Optional[dict]:
+        """Get the most recent portfolio snapshot, or None if none exist."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT equity, drawdown, peak_equity, created_at "
+                "FROM portfolio_snapshots ORDER BY id DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "equity": row[0],
+                "drawdown": row[1],
+                "peak_equity": row[2],
+                "created_at": row[3],
+            }
+        finally:
+            conn.close()
+
+    def get_initial_equity(self) -> Optional[float]:
+        """Equity at the first recorded snapshot — proxy for starting capital."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT equity FROM portfolio_snapshots ORDER BY id ASC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
     # ==================== Instrument Signals ====================
 
     def save_instrument_signal(
