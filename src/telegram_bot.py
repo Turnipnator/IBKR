@@ -15,6 +15,25 @@ from .config import telegram_config, TelegramConfig
 logger = logging.getLogger(__name__)
 
 
+_CURRENCY_SYMBOLS = {
+    "USD": "$",
+    "GBP": "£",
+    "EUR": "€",
+    "JPY": "¥",
+    "CHF": "CHF ",
+    "CAD": "C$",
+    "AUD": "A$",
+    "HKD": "HK$",
+}
+
+
+def _currency_symbol(code: Optional[str]) -> str:
+    """Map an ISO-4217 currency code to a display symbol. Falls back to '$'."""
+    if not code:
+        return "$"
+    return _CURRENCY_SYMBOLS.get(code.upper(), "$")
+
+
 class TelegramNotifier:
     """
     Sends notifications to Telegram.
@@ -515,7 +534,9 @@ Bot is now monitoring the market.
             logger.debug(f"Error fetching Telegram updates: {e}")
             return []
 
-    def process_command(self, text: str, db=None, price_fetcher=None) -> Optional[str]:
+    def process_command(
+        self, text: str, db=None, price_fetcher=None, currency_resolver=None
+    ) -> Optional[str]:
         """
         Process a command and return the response.
 
@@ -523,6 +544,7 @@ Bot is now monitoring the market.
             text: The command text (e.g., "/status")
             db: Database instance for fetching trade data
             price_fetcher: Optional callable that takes list of symbols and returns dict of prices
+            currency_resolver: Optional callable returning the ISO-4217 base currency code
 
         Returns:
             Response message or None if not a command
@@ -535,7 +557,7 @@ Bot is now monitoring the market.
         if command in ["/status", "/positions", "/pos"]:
             return self._handle_positions_command(db, price_fetcher)
         elif command in ["/stats", "/performance"]:
-            return self._handle_stats_command(db)
+            return self._handle_stats_command(db, currency_resolver)
         elif command in ["/help", "/start"]:
             return self._handle_help_command()
 
@@ -647,12 +669,19 @@ Bot is now monitoring the market.
             logger.error(f"Error fetching positions: {e}")
             return f"\u26A0\uFE0F Error fetching positions: {e}"
 
-    def _handle_stats_command(self, db) -> str:
+    def _handle_stats_command(self, db, currency_resolver=None) -> str:
         """Handle /stats command - show paper trade statistics."""
         if db is None:
             return "\u26A0\uFE0F Cannot fetch stats - no database connection"
 
         try:
+            ccy = "$"
+            if currency_resolver:
+                try:
+                    ccy = _currency_symbol(currency_resolver())
+                except Exception as e:
+                    logger.debug(f"Currency resolver failed: {e}")
+
             stats = db.get_paper_trade_stats()
 
             pnl = stats['total_pnl']
@@ -693,12 +722,12 @@ Bot is now monitoring the market.
             if snapshot:
                 return f"""\U0001F4CA <b>Trading Stats</b>
 
-\U0001F4B0 <b>Equity:</b> ${balance:,.2f}
-{pnl_emoji} <b>Total P&L:</b> {pnl_sign}${pnl:,.2f} ({pnl_sign}{return_pct:.2f}%)
-   Realized: {r_sign}${realized:,.2f}
-   Unrealized: {u_sign}${unrealized:,.2f}
+\U0001F4B0 <b>Equity:</b> {ccy}{balance:,.2f}
+{pnl_emoji} <b>Total P&L:</b> {pnl_sign}{ccy}{pnl:,.2f} ({pnl_sign}{return_pct:.2f}%)
+   Realized: {r_sign}{ccy}{realized:,.2f}
+   Unrealized: {u_sign}{ccy}{unrealized:,.2f}
 
-\U0001F4C9 <b>Drawdown:</b> {dd_pct:.2f}% (peak ${peak:,.0f})
+\U0001F4C9 <b>Drawdown:</b> {dd_pct:.2f}% (peak {ccy}{peak:,.0f})
 
 <b>Total Trades:</b> {stats['total_trades']}
 <b>Open:</b> {stats['open_trades']} | <b>Closed:</b> {stats['closed_trades']}
@@ -711,7 +740,7 @@ Bot is now monitoring the market.
             return f"""\U0001F4CA <b>Trading Stats</b>
 
 ⚠️ No portfolio snapshot yet — showing realized only
-{pnl_emoji} <b>Realized P&L:</b> {pnl_sign}${realized:,.2f}
+{pnl_emoji} <b>Realized P&L:</b> {pnl_sign}{ccy}{realized:,.2f}
 
 <b>Total Trades:</b> {stats['total_trades']}
 <b>Open:</b> {stats['open_trades']} | <b>Closed:</b> {stats['closed_trades']}
@@ -753,7 +782,7 @@ def get_notifier() -> TelegramNotifier:
     return _notifier
 
 
-def check_telegram_commands(db=None, price_fetcher=None) -> None:
+def check_telegram_commands(db=None, price_fetcher=None, currency_resolver=None) -> None:
     """
     Check for and process any pending Telegram commands.
     Call this periodically from the main bot loop.
@@ -761,6 +790,7 @@ def check_telegram_commands(db=None, price_fetcher=None) -> None:
     Args:
         db: Database instance for fetching trade data
         price_fetcher: Optional callable that takes list of symbols and returns dict of prices
+        currency_resolver: Optional callable returning the ISO-4217 base currency code
     """
     global _last_update_id
 
@@ -782,7 +812,9 @@ def check_telegram_commands(db=None, price_fetcher=None) -> None:
             if str(chat_id) != notifier.config.chat_id:
                 continue
 
-            response = notifier.process_command(text, db, price_fetcher)
+            response = notifier.process_command(
+                text, db, price_fetcher, currency_resolver
+            )
             if response:
                 notifier.send_sync(response)
                 logger.info(f"Responded to Telegram command: {text}")

@@ -70,6 +70,7 @@ class TradingBot:
         self._consecutive_failures = 0
         self._failure_alert_threshold = 1
         self._last_failure_alert: Optional[str] = None
+        self._base_currency: Optional[str] = None
 
         # Gateway auto-restart on connection failure
         self.gateway_monitor = GatewayMonitor(notifier=self.notifier)
@@ -245,6 +246,18 @@ class TradingBot:
                 win_rate=stats['win_rate'],
             )
             self._last_summary_date = today
+
+    def _get_base_currency(self) -> Optional[str]:
+        """Return the account base currency (ISO-4217), cached after first lookup."""
+        if self._base_currency:
+            return self._base_currency
+        if not self.connection.ensure_connected():
+            return None
+        summary = self.connection.get_account_summary()
+        code = (summary.get("NetLiquidation") or {}).get("currency")
+        if code:
+            self._base_currency = code
+        return self._base_currency
 
     def connect(self) -> bool:
         logger.info("Connecting to IBKR...")
@@ -428,7 +441,7 @@ class TradingBot:
                     for _ in range(20):  # 20 × 3s = 60s between log lines
                         if not self.running:
                             break
-                        check_telegram_commands(self.db, None)
+                        check_telegram_commands(self.db, None, self._get_base_currency)
                         time.sleep(3)
                     continue
 
@@ -458,7 +471,7 @@ class TradingBot:
                 for _ in range(20):  # 20 × 3s = 60s
                     if not self.running:
                         break
-                    check_telegram_commands(self.db, get_prices)
+                    check_telegram_commands(self.db, get_prices, self._get_base_currency)
                     time.sleep(3)
 
         except Exception as e:
