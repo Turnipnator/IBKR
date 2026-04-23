@@ -535,7 +535,13 @@ Bot is now monitoring the market.
             return []
 
     def process_command(
-        self, text: str, db=None, price_fetcher=None, currency_resolver=None
+        self,
+        text: str,
+        db=None,
+        price_fetcher=None,
+        currency_resolver=None,
+        account_fetcher=None,
+        status_fetcher=None,
     ) -> Optional[str]:
         """
         Process a command and return the response.
@@ -545,6 +551,8 @@ Bot is now monitoring the market.
             db: Database instance for fetching trade data
             price_fetcher: Optional callable that takes list of symbols and returns dict of prices
             currency_resolver: Optional callable returning the ISO-4217 base currency code
+            account_fetcher: Optional callable returning a dict of live IBKR account summary values
+            status_fetcher: Optional callable returning a dict of bot health/state
 
         Returns:
             Response message or None if not a command
@@ -558,6 +566,16 @@ Bot is now monitoring the market.
             return self._handle_positions_command(db, price_fetcher)
         elif command in ["/stats", "/performance"]:
             return self._handle_stats_command(db, currency_resolver)
+        elif command == "/balance":
+            return self._handle_balance_command(account_fetcher, currency_resolver)
+        elif command == "/pnl":
+            return self._handle_pnl_command(db, price_fetcher, currency_resolver)
+        elif command == "/history":
+            return self._handle_history_command(db, currency_resolver)
+        elif command == "/health":
+            return self._handle_health_command(status_fetcher)
+        elif command == "/markets":
+            return self._handle_markets_command()
         elif command in ["/help", "/start"]:
             return self._handle_help_command()
 
@@ -754,13 +772,378 @@ Bot is now monitoring the market.
             logger.error(f"Error fetching stats: {e}")
             return f"\u26A0\uFE0F Error fetching stats: {e}"
 
+    def _handle_balance_command(self, account_fetcher, currency_resolver=None) -> str:
+        """Handle /balance command \u2014 live IBKR account balance."""
+        if account_fetcher is None:
+            return "\u26a0\ufe0f Balance unavailable \u2014 bot not connected to IBKR"
+
+        try:
+            summary = account_fetcher() or {}
+            if not summary:
+                return "\u26a0\ufe0f Could not fetch account summary from IBKR"
+
+            def _num(tag):
+                v = (summary.get(tag) or {}).get("value")
+                try:
+                    return float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    return None
+
+            net_liq = _num("NetLiquidation")
+            cash = _num("TotalCashValue")
+            buying_power = _num("BuyingPower")
+            unrealized = _num("UnrealizedPnL") or 0.0
+            realized = _num("RealizedPnL") or 0.0
+            currency = (summary.get("NetLiquidation") or {}).get("currency") or ""
+
+            ccy = "$"
+            if currency_resolver:
+                try:
+                    ccy = _currency_symbol(currency_resolver())
+                except Exception:
+                    pass
+            elif currency:
+                ccy = _currency_symbol(currency)
+
+            u_sign = "+" if unrealized >= 0 else ""
+            r_sign = "+" if realized >= 0 else ""
+            u_emoji = "\U0001F7E2" if unrealized >= 0 else "\U0001F534"
+
+            lines = [f"\U0001F4B0 <b>Account Balance</b>\n"]
+            if net_liq is not None:
+                lines.append(f"<b>Equity:</b> {ccy}{net_liq:,.2f}")
+            if cash is not None:
+                lines.append(f"<b>Cash:</b> {ccy}{cash:,.2f}")
+            if buying_power is not None:
+                lines.append(f"<b>Buying Power:</b> {ccy}{buying_power:,.2f}")
+            lines.append(
+                f"{u_emoji} <b>Unrealized P&L:</b> {u_sign}{ccy}{unrealized:,.2f}"
+            )
+            lines.append(f"<b>Realized (lifetime):</b> {r_sign}{ccy}{realized:,.2f}")
+            if currency:
+                lines.append(f"<i>Base currency: {currency}</i>")
+            lines.append(
+                f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+            )
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error fetching balance: {e}")
+            return f"\u26a0\ufe0f Error fetching balance: {e}"
+
+    def _handle_pnl_command(
+        self, db, price_fetcher=None, currency_resolver=None
+    ) -> str:
+        """Handle /pnl command \u2014 today's P&L breakdown."""
+        if db is None:
+            return "\u26a0\ufe0f Cannot fetch P&L \u2014 no database connection"
+
+        try:
+            ccy = "$"
+            if currency_resolver:
+                try:
+                    ccy = _currency_symbol(currency_resolver())
+                except Exception:
+                    pass
+
+            realized_today = db.get_daily_pnl()
+
+            closed_today = 0
+            try:
+                conn = db._get_connection()
+                cur = conn.execute(
+                    "SELECT COUNT(*) FROM paper_trades "
+                    "WHERE status != 'OPEN' AND date(exit_time) = date('now')"
+                )
+                closed_today = cur.fetchone()[0] or 0
+                conn.close()
+            except Exception as e:
+                logger.debug(f"Closed-today count failed: {e}")
+
+            open_trades = db.get_open_paper_trades()
+            unrealized = 0.0
+            unrealized_known = False
+            if open_trades and price_fetcher:
+                symbols = list({t['symbol'] for t in open_trades})
+                prices = price_fetcher(symbols) or {}
+                for t in open_trades:
+                    px = prices.get(t['symbol'])
+                    if px is None:
+                        continue
+                    direction = 1 if t['action'] == 'BUY' else -1
+                    unrealized += (px - t['entry_price']) * t['quantity'] * direction
+                    unrealized_known = True
+
+            total = realized_today + unrealized
+            r_sign = "+" if realized_today >= 0 else ""
+            u_sign = "+" if unrealized >= 0 else ""
+            t_sign = "+" if total >= 0 else ""
+            t_emoji = "\U0001F7E2" if total >= 0 else "\U0001F534"
+
+            unr_line = (
+                f"<b>Unrealized:</b> {u_sign}{ccy}{unrealized:,.2f} "
+                f"({len(open_trades)} open)"
+                if unrealized_known
+                else f"<b>Unrealized:</b> n/a ({len(open_trades)} open \u2014 no live prices)"
+            )
+
+            return (
+                f"\U0001F4CA <b>Today's P&L</b>\n\n"
+                f"<b>Realized:</b> {r_sign}{ccy}{realized_today:,.2f} "
+                f"({closed_today} closed)\n"
+                f"{unr_line}\n"
+                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                f"{t_emoji} <b>Total:</b> {t_sign}{ccy}{total:,.2f}\n\n"
+                f"<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+            )
+
+        except Exception as e:
+            logger.error(f"Error fetching P&L: {e}")
+            return f"\u26a0\ufe0f Error fetching P&L: {e}"
+
+    def _handle_history_command(self, db, currency_resolver=None) -> str:
+        """Handle /history command \u2014 equity curve summary."""
+        if db is None:
+            return "\u26a0\ufe0f Cannot fetch history \u2014 no database connection"
+
+        try:
+            ccy = "$"
+            if currency_resolver:
+                try:
+                    ccy = _currency_symbol(currency_resolver())
+                except Exception:
+                    pass
+
+            conn = db._get_connection()
+            try:
+                first = conn.execute(
+                    "SELECT equity, created_at FROM portfolio_snapshots "
+                    "ORDER BY id ASC LIMIT 1"
+                ).fetchone()
+                last = conn.execute(
+                    "SELECT equity, peak_equity, drawdown, created_at "
+                    "FROM portfolio_snapshots ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                max_dd_row = conn.execute(
+                    "SELECT MAX(drawdown) FROM portfolio_snapshots"
+                ).fetchone()
+                snap_count = conn.execute(
+                    "SELECT COUNT(*) FROM portfolio_snapshots"
+                ).fetchone()[0] or 0
+
+                closed = conn.execute(
+                    "SELECT COUNT(*), "
+                    "SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN pnl_amount <= 0 THEN 1 ELSE 0 END), "
+                    "COALESCE(SUM(pnl_amount), 0), "
+                    "MAX(pnl_amount), MIN(pnl_amount) "
+                    "FROM paper_trades WHERE status != 'OPEN'"
+                ).fetchone()
+                best = conn.execute(
+                    "SELECT symbol, pnl_amount FROM paper_trades "
+                    "WHERE status != 'OPEN' ORDER BY pnl_amount DESC LIMIT 1"
+                ).fetchone()
+                worst = conn.execute(
+                    "SELECT symbol, pnl_amount FROM paper_trades "
+                    "WHERE status != 'OPEN' ORDER BY pnl_amount ASC LIMIT 1"
+                ).fetchone()
+            finally:
+                conn.close()
+
+            if not first or not last:
+                return (
+                    "\U0001F4C8 <b>Performance History</b>\n\n"
+                    "No portfolio snapshots yet. "
+                    "The first rebalance will seed the equity curve.\n\n"
+                    f"<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+                )
+
+            starting, start_ts = first[0], first[1]
+            current, peak, current_dd = last[0], last[1], last[2]
+            max_dd = (max_dd_row[0] or 0.0) * 100
+            total_ret_pct = (
+                ((current - starting) / starting * 100) if starting > 0 else 0.0
+            )
+            ret_sign = "+" if total_ret_pct >= 0 else ""
+            ret_emoji = "\U0001F7E2" if total_ret_pct >= 0 else "\U0001F534"
+
+            lines = [
+                "\U0001F4C8 <b>Performance History</b>\n",
+                f"<b>Starting:</b> {ccy}{starting:,.2f} <i>({start_ts[:10]})</i>",
+                f"<b>Current:</b>  {ccy}{current:,.2f}",
+                f"<b>Peak:</b>     {ccy}{peak:,.2f}",
+                "",
+                f"{ret_emoji} <b>Total Return:</b> {ret_sign}{total_ret_pct:.2f}%",
+                f"\U0001F4C9 <b>Max Drawdown:</b> {max_dd:.2f}%",
+                f"<b>Current Drawdown:</b> {current_dd * 100:.2f}%",
+                f"<b>Snapshots:</b> {snap_count}",
+                "",
+                "<b>Closed Trades:</b>",
+            ]
+            total_closed = closed[0] or 0
+            wins = closed[1] or 0
+            losses = closed[2] or 0
+            total_pnl = closed[3] or 0.0
+            win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
+            tp_sign = "+" if total_pnl >= 0 else ""
+            lines.append(
+                f"  {total_closed} trades | {wins}W / {losses}L "
+                f"({win_rate:.1f}%)"
+            )
+            lines.append(f"  P&L: {tp_sign}{ccy}{total_pnl:,.2f}")
+            if best and best[1] is not None:
+                lines.append(f"  Best: {best[0]} +{ccy}{best[1]:,.2f}")
+            if worst and worst[1] is not None and worst[1] < 0:
+                lines.append(f"  Worst: {worst[0]} {ccy}{worst[1]:,.2f}")
+
+            lines.append(
+                f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+            )
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error fetching history: {e}")
+            return f"\u26a0\ufe0f Error fetching history: {e}"
+
+    def _handle_health_command(self, status_fetcher) -> str:
+        """Handle /health command \u2014 bot health summary."""
+        if status_fetcher is None:
+            return "\u26a0\ufe0f Health data unavailable"
+
+        try:
+            s = status_fetcher() or {}
+            connected = s.get("connected", False)
+            dry_run = s.get("dry_run", True)
+            uptime_s = s.get("uptime_seconds", 0)
+            last_reb = s.get("last_rebalance")
+            last_risk = s.get("last_risk_check")
+            last_probe = s.get("last_probe_time")
+            probe_failures = s.get("probe_failures", 0)
+
+            conn_emoji = "\u2705" if connected else "\u274c"
+            mode_label = "DRY RUN" if dry_run else "LIVE"
+            mode_emoji = "\U0001F9EA" if dry_run else "\U0001F525"
+            probe_emoji = "\u2705" if probe_failures == 0 else "\u26a0\ufe0f"
+
+            def _fmt_uptime(sec: float) -> str:
+                sec = int(sec or 0)
+                d, rem = divmod(sec, 86400)
+                h, rem = divmod(rem, 3600)
+                m, _ = divmod(rem, 60)
+                if d > 0:
+                    return f"{d}d {h}h {m}m"
+                if h > 0:
+                    return f"{h}h {m}m"
+                return f"{m}m"
+
+            def _fmt_ago(dt):
+                if dt is None:
+                    return "never"
+                delta = (datetime.now() - dt).total_seconds()
+                if delta < 60:
+                    return f"{int(delta)}s ago"
+                if delta < 3600:
+                    return f"{int(delta // 60)}m ago"
+                if delta < 86400:
+                    return f"{int(delta // 3600)}h ago"
+                return f"{int(delta // 86400)}d ago"
+
+            lines = [
+                "\U0001F3E5 <b>Bot Health</b>\n",
+                f"{conn_emoji} <b>IBKR:</b> {'Connected' if connected else 'DISCONNECTED'}",
+                f"{mode_emoji} <b>Mode:</b> {mode_label}",
+                f"{probe_emoji} <b>Data probe:</b> {_fmt_ago(last_probe)} "
+                f"(fail streak {probe_failures})",
+                f"\u23f1 <b>Uptime:</b> {_fmt_uptime(uptime_s)}",
+                f"\U0001F504 <b>Last rebalance:</b> {_fmt_ago(last_reb)}",
+                f"\U0001F6E1 <b>Last risk check:</b> {_fmt_ago(last_risk)}",
+                f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>",
+            ]
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error fetching health: {e}")
+            return f"\u26a0\ufe0f Error fetching health: {e}"
+
+    def _handle_markets_command(self) -> str:
+        """Handle /markets command \u2014 top signals from the screener watchlist."""
+        try:
+            from pathlib import Path
+            wl_path = Path("data/watchlist.json")
+            if not wl_path.exists():
+                return (
+                    "\U0001F4CA <b>Market Signals</b>\n\n"
+                    "No watchlist yet \u2014 screener hasn't produced output."
+                )
+
+            with open(wl_path) as f:
+                data = json.load(f)
+
+            strategy = data.get("strategy", "n/a")
+            updated = data.get("updated_at", "n/a")
+            symbols = data.get("symbols", {}) or {}
+            signals = data.get("signals", {}) or {}
+            total_instruments = sum(len(v) for v in symbols.values())
+
+            threshold = 0.3
+            longs = [
+                (s, v["tsmom_score"])
+                for s, v in signals.items()
+                if v.get("tsmom_score", 0) > threshold
+            ]
+            shorts = [
+                (s, v["tsmom_score"])
+                for s, v in signals.items()
+                if v.get("tsmom_score", 0) < -threshold
+            ]
+            flat_count = len(signals) - len(longs) - len(shorts)
+            longs.sort(key=lambda x: x[1], reverse=True)
+            shorts.sort(key=lambda x: x[1])
+
+            lines = [
+                "\U0001F4CA <b>Market Signals</b>\n",
+                f"<b>Strategy:</b> {strategy}",
+                f"<b>Universe:</b> {total_instruments} instruments",
+                f"<b>Updated:</b> <code>{updated}</code>\n",
+                f"\U0001F4C8 <b>LONG:</b> {len(longs)} | "
+                f"\U0001F4C9 <b>SHORT:</b> {len(shorts)} | "
+                f"\u26aa <b>FLAT:</b> {flat_count}",
+            ]
+
+            if longs:
+                lines.append("\n<b>Top Longs:</b>")
+                for sym, score in longs[:5]:
+                    lines.append(f"  {sym} ({score:+.2f})")
+            if shorts:
+                lines.append("\n<b>Top Shorts:</b>")
+                for sym, score in shorts[:5]:
+                    lines.append(f"  {sym} ({score:+.2f})")
+
+            lines.append(
+                f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+            )
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error fetching markets: {e}")
+            return f"\u26a0\ufe0f Error fetching markets: {e}"
+
     def _handle_help_command(self) -> str:
         """Handle /help command."""
         return """\U0001F916 <b>IBKR Trading Bot Commands</b>
 
-<b>/positions</b> - Show open paper trades
-<b>/stats</b> - Show trading statistics
-<b>/help</b> - Show this help message
+\U0001F4CA <b>Monitoring</b>
+<b>/positions</b> \u2014 open paper trades with live P&L
+<b>/balance</b> \u2014 live IBKR account balance
+<b>/markets</b> \u2014 current signals from the watchlist
+<b>/health</b> \u2014 bot connection & health
+
+\U0001F4B0 <b>Performance</b>
+<b>/pnl</b> \u2014 today's realised + unrealised P&L
+<b>/stats</b> \u2014 cumulative trading statistics
+<b>/history</b> \u2014 equity curve & closed-trade summary
+
+<b>/help</b> \u2014 this message
 
 The bot will automatically notify you of:
 \u2022 New trade opportunities
@@ -782,7 +1165,13 @@ def get_notifier() -> TelegramNotifier:
     return _notifier
 
 
-def check_telegram_commands(db=None, price_fetcher=None, currency_resolver=None) -> None:
+def check_telegram_commands(
+    db=None,
+    price_fetcher=None,
+    currency_resolver=None,
+    account_fetcher=None,
+    status_fetcher=None,
+) -> None:
     """
     Check for and process any pending Telegram commands.
     Call this periodically from the main bot loop.
@@ -791,6 +1180,8 @@ def check_telegram_commands(db=None, price_fetcher=None, currency_resolver=None)
         db: Database instance for fetching trade data
         price_fetcher: Optional callable that takes list of symbols and returns dict of prices
         currency_resolver: Optional callable returning the ISO-4217 base currency code
+        account_fetcher: Optional callable returning a dict of live IBKR account summary values
+        status_fetcher: Optional callable returning a dict of bot health/state
     """
     global _last_update_id
 
@@ -813,7 +1204,12 @@ def check_telegram_commands(db=None, price_fetcher=None, currency_resolver=None)
                 continue
 
             response = notifier.process_command(
-                text, db, price_fetcher, currency_resolver
+                text,
+                db,
+                price_fetcher,
+                currency_resolver,
+                account_fetcher,
+                status_fetcher,
             )
             if response:
                 notifier.send_sync(response)

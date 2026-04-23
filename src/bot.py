@@ -66,11 +66,13 @@ class TradingBot:
 
         self._last_summary_date: Optional[str] = None
         self._last_rebalance_date: Optional[str] = None
+        self._last_rebalance_at: Optional[datetime] = None
         self._last_risk_check: Optional[datetime] = None
         self._consecutive_failures = 0
         self._failure_alert_threshold = 1
         self._last_failure_alert: Optional[str] = None
         self._base_currency: Optional[str] = None
+        self._started_at: datetime = datetime.now()
 
         # Gateway auto-restart on connection failure
         self.gateway_monitor = GatewayMonitor(notifier=self.notifier)
@@ -259,6 +261,32 @@ class TradingBot:
             self._base_currency = code
         return self._base_currency
 
+    def _get_account_summary(self) -> dict:
+        """Return the live IBKR account summary for /balance. Empty if not connected."""
+        if not self.connection.ensure_connected():
+            return {}
+        try:
+            return self.connection.get_account_summary() or {}
+        except Exception as e:
+            logger.debug(f"get_account_summary failed: {e}")
+            return {}
+
+    def _get_bot_status(self) -> dict:
+        """Return a snapshot of bot/connection state for /health."""
+        try:
+            connected = bool(self.connection.ib.isConnected())
+        except Exception:
+            connected = False
+        return {
+            "connected": connected,
+            "dry_run": self.dry_run,
+            "uptime_seconds": (datetime.now() - self._started_at).total_seconds(),
+            "last_rebalance": self._last_rebalance_at,
+            "last_risk_check": self._last_risk_check,
+            "last_probe_time": getattr(self.data_health, "_last_probe_time", None),
+            "probe_failures": getattr(self.data_health, "consecutive_failures", 0),
+        }
+
     def connect(self) -> bool:
         logger.info("Connecting to IBKR...")
         return self.connection.connect()
@@ -441,7 +469,13 @@ class TradingBot:
                     for _ in range(20):  # 20 × 3s = 60s between log lines
                         if not self.running:
                             break
-                        check_telegram_commands(self.db, None, self._get_base_currency)
+                        check_telegram_commands(
+                            self.db,
+                            None,
+                            self._get_base_currency,
+                            self._get_account_summary,
+                            self._get_bot_status,
+                        )
                         time.sleep(3)
                     continue
 
@@ -455,6 +489,7 @@ class TradingBot:
                     logger.info("=== DAILY REBALANCE ===")
                     self.run_once()
                     self._last_rebalance_date = now_et.strftime('%Y-%m-%d')
+                    self._last_rebalance_at = datetime.now()
                     self._last_risk_check = datetime.now()
 
                 # Intraday risk check
@@ -471,7 +506,13 @@ class TradingBot:
                 for _ in range(20):  # 20 × 3s = 60s
                     if not self.running:
                         break
-                    check_telegram_commands(self.db, get_prices, self._get_base_currency)
+                    check_telegram_commands(
+                        self.db,
+                        get_prices,
+                        self._get_base_currency,
+                        self._get_account_summary,
+                        self._get_bot_status,
+                    )
                     time.sleep(3)
 
         except Exception as e:
