@@ -191,14 +191,15 @@ class DecisionEngine:
     def _calculate_target_positions(
         self,
         signals: dict[str, dict],
-        net_liq: float,
+        capital: float,
     ) -> dict[str, dict]:
         """
         Calculate target position sizes using volatility-scaled sizing.
 
         Args:
             signals: Dict of symbol -> signal data (from _compute_all_signals)
-            net_liq: Current net liquidation value
+            capital: Deployable equity used as the sizing denominator
+                (excludes accrued interest / other paper-account inflation)
 
         Returns:
             Dict of symbol -> {target_shares, target_weight, direction, stop_price}
@@ -230,7 +231,7 @@ class DecisionEngine:
 
         # Count active positions for risk budget distribution
         num_active = len(active_signals)
-        risk_per_position = (net_liq * self.config.risk_budget) / num_active
+        risk_per_position = (capital * self.config.risk_budget) / num_active
 
         for symbol, data in active_signals.items():
             combined = data["combined"]
@@ -254,7 +255,7 @@ class DecisionEngine:
 
             target_value = risk_per_position / (dollar_risk / price)
             # Clamp to max position size
-            max_value = net_liq * self.config.max_position_pct
+            max_value = capital * self.config.max_position_pct
             target_value = min(target_value, max_value)
 
             target_shares = int(target_value / price)
@@ -271,7 +272,7 @@ class DecisionEngine:
             else:
                 stop_price = round(price + self.config.atr_stop_multiplier * atr_val, 2)
 
-            target_weight = (target_shares * price) / net_liq
+            target_weight = (target_shares * price) / capital
 
             targets[symbol] = {
                 "target_shares": target_shares,
@@ -284,15 +285,15 @@ class DecisionEngine:
             }
 
         # Enforce asset class limits
-        targets = self._apply_asset_class_limits(targets, net_liq)
+        targets = self._apply_asset_class_limits(targets, capital)
 
         # Enforce gross exposure limit
-        targets = self._apply_gross_exposure_limit(targets, net_liq)
+        targets = self._apply_gross_exposure_limit(targets, capital)
 
         return targets
 
     def _apply_asset_class_limits(
-        self, targets: dict, net_liq: float,
+        self, targets: dict, capital: float,
     ) -> dict:
         """Reduce positions if an asset class exceeds its limit."""
         max_pct = self.config.max_asset_class_pct
@@ -309,13 +310,13 @@ class DecisionEngine:
                 for symbol, t in targets.items():
                     if (self._get_asset_class(symbol) or "other") == ac:
                         t["target_shares"] = int(t["target_shares"] * scale)
-                        t["target_weight"] = (t["target_shares"] * t["price"]) / net_liq
+                        t["target_weight"] = (t["target_shares"] * t["price"]) / capital
                 logger.info(f"Scaled {ac} from {exposure:.1%} to {max_pct:.1%}")
 
         return targets
 
     def _apply_gross_exposure_limit(
-        self, targets: dict, net_liq: float,
+        self, targets: dict, capital: float,
     ) -> dict:
         """Scale all positions if gross exposure exceeds limit."""
         gross = sum(abs(t["target_weight"]) for t in targets.values())
@@ -323,7 +324,7 @@ class DecisionEngine:
             scale = self.config.max_gross_exposure / gross
             for t in targets.values():
                 t["target_shares"] = int(t["target_shares"] * scale)
-                t["target_weight"] = (t["target_shares"] * t["price"]) / net_liq
+                t["target_weight"] = (t["target_shares"] * t["price"]) / capital
             logger.info(f"Scaled gross exposure from {gross:.1%} to {self.config.max_gross_exposure:.1%}")
         return targets
 
@@ -374,13 +375,17 @@ class DecisionEngine:
         # Get portfolio value
         portfolio = self.position_manager.get_portfolio_value()
         net_liq = portfolio.get('net_liquidation', 0)
-        if net_liq <= 0:
+        sizing_capital = portfolio.get('sizing_capital') or net_liq
+        if net_liq <= 0 or sizing_capital <= 0:
             logger.error("Cannot get portfolio value")
             return []
 
-        logger.info(f"Portfolio: ${net_liq:,.0f}")
+        logger.info(
+            f"Portfolio: net_liq={net_liq:,.0f} sizing_capital={sizing_capital:,.0f} "
+            f"(accrued={portfolio.get('accrued_cash', 0):,.0f})"
+        )
 
-        # Check portfolio-level risk
+        # Check portfolio-level risk (drawdown uses total wealth — NetLiq)
         risk_ok, risk_reason = self._check_portfolio_risk(net_liq)
         self.state.market_ok = risk_ok
         self.state.market_reason = risk_reason
@@ -437,16 +442,16 @@ class DecisionEngine:
                 volatility=sig_data["volatility"],
             )
 
-        # Calculate target positions
+        # Calculate target positions (sized against deployable equity)
         logger.info("\n--- Calculating target positions ---")
         reduce_mode = "REDUCE" in risk_reason
-        targets = self._calculate_target_positions(signals, net_liq)
+        targets = self._calculate_target_positions(signals, sizing_capital)
 
         if reduce_mode:
             logger.info("REDUCE mode — halving all targets")
             for t in targets.values():
                 t["target_shares"] = int(t["target_shares"] * 0.5)
-                t["target_weight"] = (t["target_shares"] * t["price"]) / net_liq
+                t["target_weight"] = (t["target_shares"] * t["price"]) / sizing_capital
 
         # Generate opportunities (rebalance orders)
         opportunities = []
@@ -559,10 +564,12 @@ class DecisionEngine:
         portfolio = self.position_manager.get_portfolio_value()
         lines.extend([
             "PORTFOLIO:",
-            f"  Net Liquidation: ${portfolio.get('net_liquidation', 0):,.2f}",
-            f"  Buying Power:    ${portfolio.get('buying_power', 0):,.2f}",
-            f"  Unrealized P&L:  ${portfolio.get('unrealized_pnl', 0):,.2f}",
-            f"  Drawdown:        {self.state.current_drawdown:.1%}",
+            f"  Net Liquidation:  ${portfolio.get('net_liquidation', 0):,.2f}",
+            f"  Sizing Capital:   ${portfolio.get('sizing_capital', 0):,.2f}",
+            f"  Accrued Cash:     ${portfolio.get('accrued_cash', 0):,.2f}",
+            f"  Buying Power:     ${portfolio.get('buying_power', 0):,.2f}",
+            f"  Unrealized P&L:   ${portfolio.get('unrealized_pnl', 0):,.2f}",
+            f"  Drawdown:         {self.state.current_drawdown:.1%}",
             "",
         ])
 

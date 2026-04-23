@@ -204,7 +204,12 @@ class ConnectionManager:
         return self.ib.managedAccounts()
 
     def get_account_summary(self) -> dict:
-        """Get account summary as a dictionary."""
+        """Get account summary as a dictionary.
+
+        Merges tags from accountSummary() with a few extras (AccruedCash,
+        EquityWithLoanValue, GrossPositionValue) that aren't in the default
+        summary but matter for sizing/display.
+        """
         if not self.ensure_connected():
             return {}
 
@@ -214,6 +219,21 @@ class ConnectionManager:
                 "value": item.value,
                 "currency": item.currency,
             }
+
+        try:
+            extras = {"AccruedCash", "EquityWithLoanValue", "GrossPositionValue"}
+            accounts = self.ib.managedAccounts() or []
+            if accounts:
+                for v in self.ib.accountValues(accounts[0]):
+                    if v.tag in extras and v.currency not in ("", "BASE"):
+                        if v.tag not in summary:
+                            summary[v.tag] = {
+                                "value": v.value,
+                                "currency": v.currency,
+                            }
+        except Exception as e:
+            logger.debug(f"Failed to merge extra account values: {e}")
+
         return summary
 
 

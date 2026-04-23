@@ -791,10 +791,19 @@ Bot is now monitoring the market.
 
             net_liq = _num("NetLiquidation")
             cash = _num("TotalCashValue")
+            gross_pos = _num("GrossPositionValue") or 0.0
+            accrued = _num("AccruedCash") or 0.0
+            equity_with_loan = _num("EquityWithLoanValue")
             buying_power = _num("BuyingPower")
             unrealized = _num("UnrealizedPnL") or 0.0
             realized = _num("RealizedPnL") or 0.0
             currency = (summary.get("NetLiquidation") or {}).get("currency") or ""
+
+            sizing = (
+                equity_with_loan
+                if equity_with_loan and equity_with_loan > 0
+                else (cash or 0.0) + gross_pos
+            )
 
             ccy = "$"
             if currency_resolver:
@@ -811,9 +820,15 @@ Bot is now monitoring the market.
 
             lines = [f"\U0001F4B0 <b>Account Balance</b>\n"]
             if net_liq is not None:
-                lines.append(f"<b>Equity:</b> {ccy}{net_liq:,.2f}")
+                lines.append(f"<b>Equity (NetLiq):</b> {ccy}{net_liq:,.2f}")
+            if sizing:
+                lines.append(f"<b>Sizing Capital:</b> {ccy}{sizing:,.2f}")
             if cash is not None:
                 lines.append(f"<b>Cash:</b> {ccy}{cash:,.2f}")
+            if gross_pos:
+                lines.append(f"<b>Positions:</b> {ccy}{gross_pos:,.2f}")
+            if accrued:
+                lines.append(f"<i>Accrued interest: {ccy}{accrued:,.2f}</i>")
             if buying_power is not None:
                 lines.append(f"<b>Buying Power:</b> {ccy}{buying_power:,.2f}")
             lines.append(

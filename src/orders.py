@@ -564,17 +564,44 @@ class PositionManager:
         return results
 
     def get_portfolio_value(self) -> dict:
-        """Get portfolio summary values."""
+        """Get portfolio summary values.
+
+        sizing_capital is the denominator used for position sizing: it's the
+        true deployable equity (cash + market value of positions), excluding
+        simulated/accrued interest that inflates paper-account NetLiquidation.
+        """
         if not self.connection.ensure_connected():
             return {}
 
+        def _num(tag):
+            try:
+                return float(summary.get(tag, {}).get('value', 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
         summary = self.connection.get_account_summary()
+        net_liq = _num('NetLiquidation')
+        total_cash = _num('TotalCashValue')
+        gross_positions = _num('GrossPositionValue')
+        accrued = _num('AccruedCash')
+        equity_with_loan = _num('EquityWithLoanValue')
+
+        sizing_capital = (
+            equity_with_loan if equity_with_loan > 0
+            else total_cash + gross_positions if (total_cash + gross_positions) > 0
+            else max(net_liq - accrued, 0.0)
+        )
+
         return {
-            'net_liquidation': float(summary.get('NetLiquidation', {}).get('value', 0)),
-            'total_cash': float(summary.get('TotalCashValue', {}).get('value', 0)),
-            'buying_power': float(summary.get('BuyingPower', {}).get('value', 0)),
-            'unrealized_pnl': float(summary.get('UnrealizedPnL', {}).get('value', 0)),
-            'realized_pnl': float(summary.get('RealizedPnL', {}).get('value', 0)),
+            'net_liquidation': net_liq,
+            'total_cash': total_cash,
+            'gross_position_value': gross_positions,
+            'accrued_cash': accrued,
+            'equity_with_loan_value': equity_with_loan,
+            'sizing_capital': sizing_capital,
+            'buying_power': _num('BuyingPower'),
+            'unrealized_pnl': _num('UnrealizedPnL'),
+            'realized_pnl': _num('RealizedPnL'),
         }
 
     def calculate_position_size(
@@ -599,12 +626,12 @@ class PositionManager:
 
         risk_pct = risk_pct or trading_config.max_position_pct
         portfolio = self.get_portfolio_value()
-        net_liq = portfolio.get('net_liquidation', 0)
+        sizing_capital = portfolio.get('sizing_capital') or portfolio.get('net_liquidation', 0)
 
-        if net_liq <= 0 or price <= 0:
+        if sizing_capital <= 0 or price <= 0:
             return 0
 
-        max_position_value = net_liq * risk_pct
+        max_position_value = sizing_capital * risk_pct
         shares = int(max_position_value / price)
 
         return max(0, shares)
