@@ -453,6 +453,116 @@ class TradingBot:
     def config_max_positions(self) -> int:
         return trading_config.max_open_positions
 
+    def _reconcile_protective_stops(self) -> int:
+        """
+        On startup, ensure every open live position has a working TRAIL/STP order.
+
+        Closes the gap where the bot crashed between entry-fill and stop-placement,
+        leaving naked positions on IBKR. Re-running is idempotent — already-protected
+        positions are skipped.
+
+        Returns the number of stops placed (0 if nothing needed).
+        """
+        if self.dry_run:
+            return 0
+        if not self.connection.ensure_connected():
+            return 0
+
+        positions = self.engine.position_manager.get_positions()
+        if not positions:
+            return 0
+
+        # Map: symbol -> set of protective stop actions already on file
+        # (long needs a SELL stop, short needs a BUY stop)
+        open_orders = self.engine.order_manager.get_open_orders()
+        protected: dict[str, set[str]] = {}
+        for t in open_orders:
+            if t.order.orderType in ("TRAIL", "STP"):
+                protected.setdefault(t.contract.symbol, set()).add(t.order.action)
+
+        from .orders import OrderAction
+        from .indicators import TrendFollowingAnalyzer
+
+        placed = 0
+        for pos in positions:
+            if pos.quantity == 0:
+                continue
+            needed_action = "SELL" if pos.quantity > 0 else "BUY"
+            if needed_action in protected.get(pos.symbol, set()):
+                continue
+
+            logger.warning(
+                f"Reconcile: {pos.symbol} ({pos.quantity:+d} shares) has no "
+                f"protective stop — placing one now"
+            )
+
+            # Fresh ATR + price from daily bars (matches engine sizing)
+            try:
+                df = self.engine.fetcher.get_historical_data(
+                    pos.symbol,
+                    duration=trading_config.data_duration,
+                    bar_size=trading_config.bar_size,
+                )
+                if df is None or df.empty:
+                    logger.error(
+                        f"Reconcile: no historical data for {pos.symbol}, skipping"
+                    )
+                    continue
+                analyzer = TrendFollowingAnalyzer(
+                    df, atr_period=trading_config.atr_period,
+                )
+                atr_val = analyzer.compute_atr()
+                current_price = analyzer.get_current_price()
+            except Exception as e:
+                logger.error(
+                    f"Reconcile: failed to fetch data for {pos.symbol}: {e}"
+                )
+                continue
+
+            if atr_val <= 0 or current_price <= 0:
+                logger.error(
+                    f"Reconcile: bad ATR ({atr_val}) or price ({current_price}) "
+                    f"for {pos.symbol}, skipping"
+                )
+                continue
+
+            trail_amount = trading_config.atr_stop_multiplier * atr_val
+            if pos.quantity > 0:
+                initial_stop = round(current_price - trail_amount, 2)
+                action = OrderAction.SELL
+            else:
+                initial_stop = round(current_price + trail_amount, 2)
+                action = OrderAction.BUY
+
+            result = self.engine.order_manager.place_trailing_stop_order(
+                symbol=pos.symbol,
+                action=action,
+                quantity=abs(pos.quantity),
+                trail_amount=trail_amount,
+                initial_stop_price=initial_stop,
+                reason="Reconciliation: position had no working protective stop",
+            )
+            if result.success:
+                placed += 1
+                logger.warning(
+                    f"Reconcile: placed trailing stop on {pos.symbol} "
+                    f"trail=${trail_amount:.2f} init=${initial_stop:.2f}"
+                )
+            else:
+                logger.error(
+                    f"Reconcile: failed to place stop on {pos.symbol}: "
+                    f"{result.message}"
+                )
+
+        if placed > 0 and self.notifier and self.notifier.enabled:
+            self.notifier.notify_error(
+                f"Reconciliation placed {placed} missing protective stop(s) on "
+                f"startup. Usually means the bot crashed mid-rebalance previously.",
+                "Startup reconciliation",
+            )
+
+        return placed
+
     def _handle_drawdown_halt(self):
         """Flatten all positions on drawdown halt. Idempotent."""
         reason = self.engine.state.market_reason
@@ -527,6 +637,13 @@ class TradingBot:
 
         if self.notifier and self.notifier.enabled:
             self.notifier.notify_bot_started(f"{mode} — {strategy}")
+
+        # Startup reconciliation: ensure no naked positions left over from a
+        # previous crash (no-op in dry_run or with no positions).
+        try:
+            self._reconcile_protective_stops()
+        except Exception as e:
+            logger.error(f"Startup reconciliation failed: {e}")
 
         try:
             while self.running:
@@ -640,6 +757,10 @@ def main():
 
     if args.once:
         bot.connect()
+        try:
+            bot._reconcile_protective_stops()
+        except Exception as e:
+            logger.error(f"Startup reconciliation failed: {e}")
         bot.run_once()
         bot.disconnect()
     else:
