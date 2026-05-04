@@ -121,6 +121,36 @@ class OrderManager:
         if not self.connection.ensure_connected():
             return OrderResult(success=False, message="Not connected to IBKR")
 
+        if quantity <= 0:
+            return OrderResult(
+                success=False,
+                message=f"Refusing to place {action.value} {symbol}: invalid quantity {quantity}",
+            )
+
+        # Idempotency guard: if a working MKT order with the same action already
+        # exists for this symbol, treat as a duplicate and skip. Protects against
+        # re-submission on bot crash/restart between placeOrder() and DB log.
+        # Filter is narrow on purpose — protective TRAIL/STP orders for the same
+        # symbol stay allowed, only same-direction MKT entries are blocked.
+        try:
+            existing = [
+                t for t in self.ib.openTrades()
+                if t.contract.symbol == symbol
+                and t.order.orderType == "MKT"
+                and t.order.action == action.value
+            ]
+        except Exception as e:
+            logger.warning(f"openTrades() failed during idempotency check: {e}")
+            existing = []
+        if existing:
+            ids = ", ".join(str(t.order.orderId) for t in existing)
+            msg = (
+                f"Skipping duplicate {action.value} {symbol}: "
+                f"working MKT order(s) already exist (orderId={ids})"
+            )
+            logger.warning(msg)
+            return OrderResult(success=False, message=msg)
+
         try:
             contract = self._create_contract(symbol)
             order = MarketOrder(action.value, quantity)

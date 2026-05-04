@@ -412,9 +412,26 @@ class TradingBot:
                 p.symbol for p in self.engine.position_manager.get_positions()
                 if p.quantity != 0
             }
+            # Pending entry orders not yet filled (e.g. submitted just before a
+            # crash). Same-symbol guard prevents duplicate entries on restart.
+            try:
+                pending_entries = {
+                    t.contract.symbol
+                    for t in self.engine.order_manager.get_open_orders()
+                    if t.order.orderType == "MKT"
+                }
+            except Exception as e:
+                logger.warning(f"Could not fetch open orders for dedupe: {e}")
+                pending_entries = set()
+
             for opp in opportunities:
                 if opp.symbol in current_positions:
                     logger.info(f"  Skipping {opp.symbol} — already holding")
+                    continue
+                if opp.symbol in pending_entries:
+                    logger.info(
+                        f"  Skipping {opp.symbol} — entry order already pending"
+                    )
                     continue
                 result = self.engine.execute_opportunity(opp)
                 if result.success:
