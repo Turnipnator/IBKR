@@ -328,6 +328,24 @@ class TradingBot:
         # Run signal analysis and generate rebalance opportunities
         opportunities = self.engine.run_analysis()
 
+        # Drawdown circuit breaker — flatten everything if engine flagged HALT
+        if (
+            not self.engine.state.market_ok
+            and "HALT" in self.engine.state.market_reason
+        ):
+            self._handle_drawdown_halt()
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "dry_run": self.dry_run,
+                "halted": True,
+                "halt_reason": self.engine.state.market_reason,
+                "symbols_analyzed": self.engine.state.symbols_analyzed,
+                "opportunities": 0,
+                "trades_executed": 0,
+                "opportunities_detail": [],
+            }
+
         results = {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -417,6 +435,45 @@ class TradingBot:
     @property
     def config_max_positions(self) -> int:
         return trading_config.max_open_positions
+
+    def _handle_drawdown_halt(self):
+        """Flatten all positions on drawdown halt. Idempotent."""
+        reason = self.engine.state.market_reason
+        logger.warning(f"=== DRAWDOWN HALT ===\n{reason}")
+
+        if self.dry_run:
+            open_trades = self.db.get_open_paper_trades()
+            for trade in open_trades:
+                try:
+                    df = self.engine.fetcher.get_historical_data(
+                        trade["symbol"], duration="2 D", bar_size="1 day",
+                    )
+                    px = (
+                        float(df["close"].iloc[-1])
+                        if df is not None and not df.empty
+                        else trade["entry_price"]
+                    )
+                    self.db.close_paper_trade(trade["id"], px, "CLOSED_HALT")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to halt-close paper trade #{trade['id']}: {e}"
+                    )
+            logger.warning(f"Halt: closed {len(open_trades)} paper trades")
+        else:
+            cancelled = self.engine.order_manager.cancel_all_orders()
+            if cancelled:
+                logger.warning(f"Halt: cancelled {cancelled} working orders")
+            close_results = self.engine.position_manager.close_all_positions()
+            ok = sum(1 for r in close_results if r.success)
+            logger.warning(
+                f"Halt: closed {ok}/{len(close_results)} live positions"
+            )
+
+        if self.notifier and self.notifier.enabled:
+            self.notifier.notify_error(
+                f"DRAWDOWN HALT — {reason}\nAll positions flattened.",
+                "Risk halt",
+            )
 
     def run_risk_check(self):
         """Run intraday risk check (trailing stops only, no new signals)."""

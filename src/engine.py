@@ -392,7 +392,10 @@ class DecisionEngine:
         logger.info(f"Risk check: {risk_reason}")
 
         if "HALT" in risk_reason:
-            logger.warning("DRAWDOWN HALT — closing all positions")
+            # Engine flags the halt; bot.run_once checks state.market_ok and
+            # flattens positions (live close_all + cancel orders, or close all
+            # paper_trades). Returning [] here just blocks new entries.
+            logger.warning(f"DRAWDOWN HALT — {risk_reason}. Bot will flatten.")
             return []
 
         # Fetch data for all instruments
@@ -536,18 +539,34 @@ class DecisionEngine:
             reason=f"Trend signal: {opportunity.signal_score:+.2f}",
         )
 
-        # Attach native stop server-side so it survives bot/gateway crashes
+        # Attach native trailing stop server-side. Survives bot/gateway crashes
+        # AND ratchets up automatically as price moves favourably.
         if result.success and opportunity.stop_loss_price:
             stop_action = (
                 OrderAction.SELL if action == OrderAction.BUY else OrderAction.BUY
             )
-            self.order_manager.place_stop_order(
-                symbol=opportunity.symbol,
-                action=stop_action,
-                quantity=opportunity.position_size,
-                stop_price=opportunity.stop_loss_price,
-                reason="Initial 3xATR stop",
-            )
+            trail_amount = self.config.atr_stop_multiplier * opportunity.atr_value
+            if trail_amount > 0:
+                self.order_manager.place_trailing_stop_order(
+                    symbol=opportunity.symbol,
+                    action=stop_action,
+                    quantity=opportunity.position_size,
+                    trail_amount=trail_amount,
+                    initial_stop_price=opportunity.stop_loss_price,
+                    reason=f"Trailing stop {self.config.atr_stop_multiplier}xATR",
+                )
+            else:
+                # ATR is zero — fall back to a fixed stop so the position is still protected
+                logger.warning(
+                    f"{opportunity.symbol}: ATR=0, using fixed stop instead of trailing"
+                )
+                self.order_manager.place_stop_order(
+                    symbol=opportunity.symbol,
+                    action=stop_action,
+                    quantity=opportunity.position_size,
+                    stop_price=opportunity.stop_loss_price,
+                    reason="Fallback fixed stop (ATR=0)",
+                )
 
         return result
 

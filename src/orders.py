@@ -269,6 +269,76 @@ class OrderManager:
             logger.error(f"Failed to place stop order: {e}")
             return OrderResult(success=False, message=str(e))
 
+    def place_trailing_stop_order(
+        self,
+        symbol: str,
+        action: OrderAction,
+        quantity: int,
+        trail_amount: float,
+        initial_stop_price: Optional[float] = None,
+        reason: Optional[str] = None,
+    ) -> OrderResult:
+        """
+        Place a server-side trailing stop order.
+
+        IBKR maintains the stop trigger at `trail_amount` from the favourable
+        extreme (high-watermark for long-exit SELL, low-watermark for short-exit
+        BUY). Submitted as GTC so it survives day boundaries.
+        """
+        if not self.connection.ensure_connected():
+            return OrderResult(success=False, message="Not connected to IBKR")
+
+        if quantity <= 0 or trail_amount <= 0:
+            return OrderResult(
+                success=False,
+                message=f"Invalid trail params: qty={quantity} trail={trail_amount}",
+            )
+
+        try:
+            contract = self._create_contract(symbol)
+            order = Order(
+                action=action.value,
+                orderType="TRAIL",
+                totalQuantity=quantity,
+                auxPrice=round(trail_amount, 2),
+                tif="GTC",
+            )
+            if initial_stop_price is not None:
+                order.trailStopPrice = round(initial_stop_price, 2)
+
+            trade = self.ib.placeOrder(contract, order)
+            self._pending_orders[trade.order.orderId] = trade
+
+            logger.info(
+                f"Placed trailing stop: {action.value} {quantity} {symbol} "
+                f"trail=${trail_amount:.2f} init=${initial_stop_price} "
+                f"(orderId={trade.order.orderId})"
+            )
+
+            self.db.save_trade(
+                symbol=symbol,
+                action=action.value,
+                quantity=quantity,
+                price=initial_stop_price or 0.0,
+                order_id=trade.order.orderId,
+                status="SUBMITTED",
+                reason=reason or f"Trailing stop ${trail_amount:.2f}",
+            )
+
+            return OrderResult(
+                success=True,
+                order_id=trade.order.orderId,
+                trade=trade,
+                message=(
+                    f"Trailing stop submitted: {action.value} {quantity} {symbol} "
+                    f"trail=${trail_amount:.2f}"
+                ),
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to place trailing stop: {e}")
+            return OrderResult(success=False, message=str(e))
+
     def place_bracket_order(
         self,
         symbol: str,
