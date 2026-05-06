@@ -21,10 +21,10 @@ except ImportError:
 # Default universe: 30 liquid ETFs across 5 uncorrelated asset classes
 _DEFAULT_UNIVERSE = {
     "equity": ["SPY", "QQQ", "IWM", "EFA", "EEM", "VGK", "EWJ", "FXI"],
-    "bond": ["TLT", "IEF", "SHY", "LQD", "HYG", "EMB"],
-    "commodity": ["GLD", "SLV", "USO", "UNG", "DBA", "DBB", "PDBC", "CPER"],
+    "bond": ["TLT", "IEF", "SHY", "LQD", "HYG", "EMB", "TIP"],
+    "commodity": ["GLD", "SLV", "USO", "UNG", "DBA", "DBB", "PDBC", "CPER", "DBC"],
     "fx": ["UUP", "FXE", "FXY", "FXB"],
-    "alt": ["VNQ", "BITO", "DBC", "TIP"],
+    "alt": ["VNQ", "BITO"],
 }
 
 _WATCHLIST_PATH = Path(os.getenv("WATCHLIST_PATH", "data/watchlist.json"))

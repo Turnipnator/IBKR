@@ -369,7 +369,7 @@ class TradingBot:
             results["opportunities_detail"].append(detail)
 
             logger.info(
-                f"Rebalance: {opp.decision.value} {opp.position_size} {opp.symbol} "
+                f"Candidate: {opp.decision.value} {opp.position_size} {opp.symbol} "
                 f"@ ${opp.current_price:.2f} (signal {opp.signal_score:+.2f})"
             )
 
@@ -378,7 +378,7 @@ class TradingBot:
                 # Check max open positions
                 open_trades = self.db.get_open_paper_trades()
                 if len(open_trades) >= self.config_max_positions:
-                    logger.info(f"  Skipping {opp.symbol} — max positions reached")
+                    logger.info(f"  → Skipped: max positions reached ({len(open_trades)}/{self.config_max_positions})")
                     continue
 
                 if not self.db.has_open_paper_trade(opp.symbol):
@@ -393,6 +393,7 @@ class TradingBot:
                         signal_score=opp.signal_score,
                         min_hold_days=trading_config.min_hold_days,
                     )
+                    logger.info(f"  → Opened paper trade #{trade_id}")
 
                     if self.notifier and self.notifier.enabled:
                         self.notifier.notify_paper_trade_opened(
@@ -404,7 +405,7 @@ class TradingBot:
                             take_profit=None,
                         )
                 else:
-                    logger.info(f"  Skipping {opp.symbol} — already have open trade")
+                    logger.info(f"  → Skipped: already have open paper trade for {opp.symbol}")
 
         # Execute if live
         if not self.dry_run and opportunities:
@@ -426,16 +427,19 @@ class TradingBot:
 
             for opp in opportunities:
                 if opp.symbol in current_positions:
-                    logger.info(f"  Skipping {opp.symbol} — already holding")
+                    logger.info(f"  → Skipped: already holding {opp.symbol}")
                     continue
                 if opp.symbol in pending_entries:
                     logger.info(
-                        f"  Skipping {opp.symbol} — entry order already pending"
+                        f"  → Skipped: entry order already pending for {opp.symbol}"
                     )
                     continue
                 result = self.engine.execute_opportunity(opp)
                 if result.success:
                     results["trades_executed"] += 1
+                    logger.info(f"  → Executed: live order placed for {opp.symbol}")
+                else:
+                    logger.info(f"  → Failed: {result.message}")
 
         # Send analysis notification
         if self.notifier and self.notifier.enabled:
