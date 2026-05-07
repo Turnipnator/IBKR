@@ -17,6 +17,8 @@ from datetime import datetime, time as dtime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from .connection import ConnectionManager
 from .engine import DecisionEngine
 from .database import Database
