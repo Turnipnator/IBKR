@@ -154,10 +154,11 @@ class TradingBot:
                 if datetime.now() < min_dt:
                     in_min_hold = True
 
-            # Get current price
+            # Fetch enough bars for ATR(20) ratchet below — "5 D" silently
+            # disabled the trailing-stop tighten because len(df) never reached 20.
             try:
                 df = self.engine.fetcher.get_historical_data(
-                    symbol, duration="5 D", bar_size="1 day"
+                    symbol, duration="60 D", bar_size="1 day"
                 )
                 if df is None or df.empty:
                     continue
