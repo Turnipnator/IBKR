@@ -118,7 +118,40 @@ ORDER BY p.id;
 \""
 ```
 
-## 7. PORTFOLIO & DRAWDOWN
+## 7. ORDER PARITY (live-mode)
+
+Every live position must have a working TRAIL/STP order, and every working stop must back a held position. The bot heals naked positions automatically (via the startup-reconcile reused at every risk check) and alerts on orphan stops.
+
+- In DRY_RUN: parity is `n/a` — the bot doesn't place IBKR orders.
+- In LIVE: any `healed` count > 0 means the bot recovered from a crash mid-rebalance; any `orphans` row means a stop exists for a symbol you're not holding (manual closure, stale order, etc.).
+
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep -E 'Order-parity:|Orphan protective' | tail -5"
+```
+
+## 8. NLV RECONCILIATION (live-mode)
+
+Compares IBKR's live `NetLiquidation` against the most recent `portfolio_snapshots.equity`. Drift ≥ 2% raises a Telegram alert — usually means a stale feed, a manual trade, or a fee/transfer the bot didn't see.
+
+- In DRY_RUN: still useful — paper account's NLV should track the equity snapshot the engine saves each rebalance.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep 'NLV reconcile' | tail -5"
+```
+
+## 9. DAILY-LOSS HALT
+
+Tracks today's realized + unrealized P&L. If `session_pnl <= -max_daily_loss` (default −$300), new entries are blocked for the rest of the day (existing positions remain — trail-stops still active). Auto-clears at midnight.
+
+- The `Daily P&L:` log line fires at every risk check and at every rebalance — you'll always see today's running number.
+- `DAILY LOSS HALT` only fires once per day on first breach (Telegram alert).
+- `Skipped: daily-loss halt active` lines confirm the gate worked.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep -E 'Daily P&L:|DAILY LOSS HALT|daily-loss halt' | tail -10"
+```
+
+## 10. PORTFOLIO & DRAWDOWN
 - Check portfolio snapshots and drawdown tracking
 - Peak equity, current drawdown level
 - Any circuit breaker triggers?
@@ -127,7 +160,7 @@ ORDER BY p.id;
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 data/trading.db 'SELECT equity, drawdown, peak_equity, created_at FROM portfolio_snapshots ORDER BY id DESC LIMIT 5;'"
 ```
 
-## 8. PERFORMANCE METRICS
+## 11. PERFORMANCE METRICS
 - Overall paper trade stats (wins, losses, P&L)
 - Average win vs average loss size
 - Separate old scalping-era trades from new trend-following trades if possible
@@ -136,14 +169,14 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 data/trading.db \"SELECT COUNT(*) as total, SUM(CASE WHEN status != 'OPEN' AND pnl_amount > 0 THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN status != 'OPEN' AND pnl_amount <= 0 THEN 1 ELSE 0 END) as losses, SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) as open_now, ROUND(COALESCE(SUM(CASE WHEN status != 'OPEN' THEN pnl_amount END), 0), 2) as total_pnl, ROUND(AVG(CASE WHEN status != 'OPEN' AND pnl_amount > 0 THEN pnl_amount END), 2) as avg_win, ROUND(AVG(CASE WHEN status != 'OPEN' AND pnl_amount < 0 THEN pnl_amount END), 2) as avg_loss FROM paper_trades;\""
 ```
 
-## 9. SYSTEM RESOURCES
+## 12. SYSTEM RESOURCES
 - RAM usage, disk space
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "free -h | head -3 && echo '---' && df -h / | tail -1"
 ```
 
-## 10. STRATEGY ASSESSMENT
+## 13. STRATEGY ASSESSMENT
 Based on the data gathered above, assess:
 - Are the TSMOM/CSMOM signals diverse across asset classes? (not concentrated)
 - Is the trailing stop (3x ATR) appropriate for current volatility?
@@ -151,13 +184,13 @@ Based on the data gathered above, assess:
 - Is the drawdown within acceptable limits?
 - Any parameter tweaks recommended?
 
-## 11. RECOMMENDATIONS
+## 14. RECOMMENDATIONS
 Provide prioritised recommendations:
 - P1 (Critical): Issues that need immediate attention
 - P2 (Important): Should be addressed soon
 - P3 (Nice to have): Optimisations for later
 
-## 12. SUMMARY DASHBOARD
+## 15. SUMMARY DASHBOARD
 Present a quick status summary table:
 
 | Check | Status | Notes |
@@ -170,6 +203,9 @@ Present a quick status summary table:
 | Last Risk Check | | (timestamp + age) |
 | Open Positions | | |
 | **Trailing Stops** | | (count of OK / STALE / ?) |
+| **Order Parity** | | (OK / healed N / N orphans / n/a) |
+| **NLV Drift** | | (% drift from last snapshot) |
+| **Daily Loss** | | (today's session P&L / halt state) |
 | Drawdown | | |
 | Logs (errors 24h) | | (count after gateway-reconnect filter) |
 | Resources | | |

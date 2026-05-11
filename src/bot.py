@@ -75,6 +75,9 @@ class TradingBot:
         self._last_failure_alert: Optional[str] = None
         self._base_currency: Optional[str] = None
         self._started_at: datetime = datetime.now()
+        self._daily_loss_halt_date: Optional[str] = None
+        self._last_nlv_drift: Optional[float] = None
+        self._last_parity_status: Optional[str] = None
 
         # Gateway auto-restart on connection failure
         self.gateway_monitor = GatewayMonitor(notifier=self.notifier)
@@ -328,6 +331,17 @@ class TradingBot:
             if closed_count > 0:
                 logger.info(f"Closed {closed_count} paper trades (trailing stop)")
 
+        # Live-mode safety nets — order parity + NLV reconcile run before the
+        # rebalance so any drift/orphans are surfaced or healed first.
+        try:
+            self._check_order_parity()
+        except Exception as e:
+            logger.error(f"Pre-rebalance order-parity check failed: {e}")
+        try:
+            self._check_nlv_reconciliation()
+        except Exception as e:
+            logger.error(f"Pre-rebalance NLV reconcile failed: {e}")
+
         # Run signal analysis and generate rebalance opportunities
         opportunities = self.engine.run_analysis()
 
@@ -348,6 +362,13 @@ class TradingBot:
                 "trades_executed": 0,
                 "opportunities_detail": [],
             }
+
+        # Daily-loss gate — softer than drawdown halt, blocks only new entries
+        try:
+            entries_allowed = self._check_daily_loss()
+        except Exception as e:
+            logger.error(f"Daily-loss check failed: {e}")
+            entries_allowed = True
 
         results = {
             "success": True,
@@ -378,6 +399,9 @@ class TradingBot:
 
             # In dry run: open paper trades
             if self.dry_run:
+                if not entries_allowed:
+                    logger.info(f"  → Skipped: daily-loss halt active")
+                    continue
                 # Check max open positions
                 open_trades = self.db.get_open_paper_trades()
                 if len(open_trades) >= self.config_max_positions:
@@ -412,6 +436,11 @@ class TradingBot:
 
         # Execute if live
         if not self.dry_run and opportunities:
+            if not entries_allowed:
+                logger.warning(
+                    "Daily-loss halt active — skipping all live entries this cycle"
+                )
+                opportunities = []
             current_positions = {
                 p.symbol for p in self.engine.position_manager.get_positions()
                 if p.quantity != 0
@@ -609,8 +638,210 @@ class TradingBot:
                 "Risk halt",
             )
 
+    # ------------------------------------------------------------------
+    # Live-mode safety nets — healthcheck items #5–#7
+    # ------------------------------------------------------------------
+
+    def _check_order_parity(self) -> str:
+        """
+        Parity #5: every live position must have a working protective stop;
+        every working stop must back a held position.
+
+        Auto-heals naked positions (reuses startup reconciliation) and logs
+        orphan stops (working stop with no matching position).
+
+        Returns a short status string, also stored on self._last_parity_status.
+        Always called; in dry_run it's a no-op + 'n/a'.
+        """
+        if self.dry_run:
+            self._last_parity_status = "n/a (dry_run)"
+            return self._last_parity_status
+        if not self.connection.ensure_connected():
+            self._last_parity_status = "skip (no conn)"
+            return self._last_parity_status
+
+        # Auto-heal any naked positions
+        placed = 0
+        try:
+            placed = self._reconcile_protective_stops()
+        except Exception as e:
+            logger.error(f"Order-parity heal failed: {e}")
+
+        # Orphan check: working TRAIL/STP for symbols with no position
+        try:
+            open_orders = self.engine.order_manager.get_open_orders()
+            positions = {
+                p.symbol: p.quantity
+                for p in self.engine.position_manager.get_positions()
+                if p.quantity != 0
+            }
+            orphans = []
+            for t in open_orders:
+                if t.order.orderType not in ("TRAIL", "STP"):
+                    continue
+                sym = t.contract.symbol
+                if positions.get(sym, 0) == 0:
+                    orphans.append(f"{sym}#{t.order.orderId}")
+        except Exception as e:
+            logger.error(f"Order-parity orphan check failed: {e}")
+            orphans = []
+
+        if orphans:
+            msg = f"Orphan protective stop(s) with no position: {', '.join(orphans)}"
+            logger.warning(f"Order-parity: {msg}")
+            if self.notifier and self.notifier.enabled:
+                self.notifier.notify_error(msg, "Order parity")
+
+        if placed > 0 and orphans:
+            status = f"healed {placed}, {len(orphans)} orphans"
+        elif placed > 0:
+            status = f"healed {placed}"
+        elif orphans:
+            status = f"{len(orphans)} orphans"
+        else:
+            status = "OK"
+
+        self._last_parity_status = status
+        logger.info(f"Order-parity: {status}")
+        return status
+
+    def _check_nlv_reconciliation(self, drift_threshold: float = 0.02) -> Optional[float]:
+        """
+        Parity #6: IBKR's live NetLiquidation vs our latest portfolio snapshot.
+        Alerts (Telegram + log) if drift >= threshold (default 2%).
+
+        Returns the drift fraction (or None if either side missing).
+        """
+        if not self.connection.ensure_connected():
+            return None
+
+        summary = self.connection.get_account_summary()
+        nlv_entry = summary.get("NetLiquidation") or {}
+        nlv_str = nlv_entry.get("value")
+        if not nlv_str:
+            logger.debug("NLV reconcile: no NetLiquidation in account summary")
+            return None
+        try:
+            live_nlv = float(nlv_str)
+        except ValueError:
+            logger.debug(f"NLV reconcile: bad NetLiquidation value '{nlv_str}'")
+            return None
+
+        snap = self.db.get_latest_portfolio_snapshot()
+        if not snap or not snap.get("equity") or snap["equity"] <= 0:
+            logger.info(f"NLV reconcile: live ${live_nlv:,.2f}, no snapshot to compare")
+            return None
+
+        last_equity = float(snap["equity"])
+        drift = abs(live_nlv - last_equity) / last_equity
+        self._last_nlv_drift = drift
+        logger.info(
+            f"NLV reconcile: live ${live_nlv:,.2f} vs snapshot ${last_equity:,.2f} "
+            f"({snap.get('created_at')}) drift={drift:.2%}"
+        )
+        if drift >= drift_threshold:
+            msg = (
+                f"NLV drift {drift:.1%} — live ${live_nlv:,.2f} vs last snapshot "
+                f"${last_equity:,.2f} (threshold {drift_threshold:.0%}). "
+                f"Investigate: stale feed, manual trade, or fee/transfer."
+            )
+            logger.warning(f"NLV reconcile: {msg}")
+            if self.notifier and self.notifier.enabled:
+                self.notifier.notify_error(msg, "NLV reconcile")
+        return drift
+
+    def _compute_session_pnl(self) -> tuple[float, float]:
+        """
+        Today's realized + unrealized P&L (base currency).
+
+        Realized: closed paper_trades dated today (works in both modes — only
+        records paper-trade P&L, not live realized; live realized comes from
+        the IBKR side below).
+        Unrealized: dry_run uses (best_price - entry) * qty as a proxy from
+        the trail-ratchet's tracked best (close enough for halt logic; we are
+        not P&L-attributing, just gating). Live mode reads IBKR UnrealizedPnL.
+        """
+        realized = self.db.get_daily_pnl()
+        unrealized = 0.0
+
+        if self.dry_run:
+            for trade in self.db.get_open_paper_trades():
+                entry = trade.get("entry_price") or 0.0
+                qty = trade.get("quantity") or 0
+                best = trade.get("best_price") or entry
+                if trade.get("action") == "BUY":
+                    unrealized += (best - entry) * qty
+                else:
+                    unrealized += (entry - best) * qty
+        else:
+            try:
+                accounts = self.connection.ib.managedAccounts() or []
+                if accounts:
+                    for v in self.connection.ib.accountValues(accounts[0]):
+                        if v.tag == "UnrealizedPnL" and v.currency not in ("", "BASE"):
+                            try:
+                                unrealized = float(v.value)
+                                break
+                            except ValueError:
+                                pass
+                        if v.tag == "RealizedPnL" and v.currency not in ("", "BASE"):
+                            try:
+                                realized = float(v.value)
+                            except ValueError:
+                                pass
+            except Exception as e:
+                logger.debug(f"Could not fetch IBKR PnL values: {e}")
+
+        return realized, unrealized
+
+    def _check_daily_loss(self) -> bool:
+        """
+        Parity #7: halt new entries if today's session P&L breaches max_daily_loss.
+
+        Side-effects:
+        - Notifies on first breach of the day
+        - Sets self._daily_loss_halt_date to today's date when halted
+        - Returns False while halted, True otherwise
+        - DOES NOT close positions (different from drawdown halt — this gates
+          only new entries to stop bleeding)
+        """
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # Auto-clear stale halt from a previous day
+        if self._daily_loss_halt_date and self._daily_loss_halt_date != today:
+            logger.info(f"Daily-loss halt cleared (was {self._daily_loss_halt_date})")
+            self._daily_loss_halt_date = None
+
+        realized, unrealized = self._compute_session_pnl()
+        session = realized + unrealized
+        limit = -abs(trading_config.max_daily_loss)
+        logger.info(
+            f"Daily P&L: realized=${realized:+,.2f} unreal=${unrealized:+,.2f} "
+            f"session=${session:+,.2f} (limit ${limit:,.2f})"
+        )
+
+        if session <= limit:
+            if self._daily_loss_halt_date != today:
+                self._daily_loss_halt_date = today
+                msg = (
+                    f"DAILY LOSS HALT — session P&L ${session:+,.2f} breaches "
+                    f"limit ${limit:,.2f}. New entries blocked for the rest of "
+                    f"the day. Existing positions remain (trail-stops still active)."
+                )
+                logger.warning(msg)
+                if self.notifier and self.notifier.enabled:
+                    self.notifier.notify_error(msg, "Daily loss halt")
+            return False
+        return True
+
+    @property
+    def daily_loss_halted(self) -> bool:
+        """True if the daily-loss halt has fired today and not yet cleared."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        return self._daily_loss_halt_date == today
+
     def run_risk_check(self):
-        """Run intraday risk check (trailing stops only, no new signals)."""
+        """Run intraday risk check (trailing stops + live-mode safety nets)."""
         if not self.connection.ensure_connected():
             return
 
@@ -623,6 +854,20 @@ class TradingBot:
                 logger.info(f"Risk check closed {closed} trades")
             else:
                 logger.info("Risk check: all positions OK")
+
+        # Live-mode safety nets (each method handles dry_run internally)
+        try:
+            self._check_order_parity()
+        except Exception as e:
+            logger.error(f"Order-parity check failed: {e}")
+        try:
+            self._check_nlv_reconciliation()
+        except Exception as e:
+            logger.error(f"NLV reconcile failed: {e}")
+        try:
+            self._check_daily_loss()
+        except Exception as e:
+            logger.error(f"Daily-loss check failed: {e}")
 
         self._last_risk_check = datetime.now()
 
