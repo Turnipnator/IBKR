@@ -754,25 +754,32 @@ class TradingBot:
         """
         Today's realized + unrealized P&L (base currency).
 
-        Realized: closed paper_trades dated today (works in both modes — only
-        records paper-trade P&L, not live realized; live realized comes from
-        the IBKR side below).
-        Unrealized: dry_run uses (best_price - entry) * qty as a proxy from
-        the trail-ratchet's tracked best (close enough for halt logic; we are
-        not P&L-attributing, just gating). Live mode reads IBKR UnrealizedPnL.
+        Realized: closed paper_trades dated today (paper mode) or IBKR
+        RealizedPnL (live).
+        Unrealized: dry_run uses the latest cached signal price as the mark;
+        falls back to best_price then entry. Live mode reads IBKR
+        UnrealizedPnL.
         """
         realized = self.db.get_daily_pnl()
         unrealized = 0.0
 
         if self.dry_run:
+            # Pull latest signal prices once for a cheap mark-to-market
+            latest_prices: dict = {}
+            try:
+                latest_prices = self.db.get_latest_signal_prices()
+            except AttributeError:
+                pass  # method might not exist yet — fall back below
+
             for trade in self.db.get_open_paper_trades():
                 entry = trade.get("entry_price") or 0.0
                 qty = trade.get("quantity") or 0
-                best = trade.get("best_price") or entry
+                sym = trade.get("symbol")
+                mark = latest_prices.get(sym) or trade.get("best_price") or entry
                 if trade.get("action") == "BUY":
-                    unrealized += (best - entry) * qty
+                    unrealized += (mark - entry) * qty
                 else:
-                    unrealized += (entry - best) * qty
+                    unrealized += (entry - mark) * qty
         else:
             try:
                 accounts = self.connection.ib.managedAccounts() or []

@@ -505,6 +505,18 @@ class Database:
         finally:
             conn.close()
 
+    def get_latest_signal_prices(self) -> dict:
+        """Symbol -> last cached signal price (most recent signal_date)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("""
+                SELECT symbol, price FROM instrument_signals
+                WHERE signal_date = (SELECT MAX(signal_date) FROM instrument_signals)
+            """)
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
     # ==================== Legacy compatibility ====================
 
     def set_symbol_cooldown(self, symbol: str, minutes: int, reason: str = "stop_loss"):
