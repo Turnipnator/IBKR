@@ -401,6 +401,43 @@ class Database:
         finally:
             conn.close()
 
+    def get_today_stats(self) -> dict:
+        """Today's activity only — opened, closed, won/lost, realized P&L."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            stats = {
+                'opened_today': 0,
+                'closed_today': 0,
+                'won_today': 0,
+                'lost_today': 0,
+                'realized_pnl_today': 0.0,
+            }
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM paper_trades WHERE date(entry_time) = ?",
+                (today,),
+            )
+            stats['opened_today'] = cursor.fetchone()[0] or 0
+
+            cursor = conn.execute("""
+                SELECT
+                    COUNT(*),
+                    SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN pnl_amount <= 0 THEN 1 ELSE 0 END),
+                    COALESCE(SUM(pnl_amount), 0)
+                FROM paper_trades
+                WHERE status != 'OPEN' AND date(exit_time) = ?
+            """, (today,))
+            row = cursor.fetchone()
+            stats['closed_today'] = row[0] or 0
+            stats['won_today'] = row[1] or 0
+            stats['lost_today'] = row[2] or 0
+            stats['realized_pnl_today'] = row[3] or 0.0
+
+            return stats
+        finally:
+            conn.close()
+
     # ==================== Portfolio Tracking ====================
 
     def save_portfolio_snapshot(self, equity: float, drawdown: float, peak_equity: float):

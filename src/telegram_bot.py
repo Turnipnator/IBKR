@@ -469,7 +469,7 @@ Bot is now monitoring the market.
 <b>Win Rate:</b> {win_rate:.1f}% {perf_emoji} {perf_text}
 {best_text}{worst_text}
 
-<i>Strategy: Scalping (TP 1.5% / SL 0.75%)</i>
+<i>Strategy: Trend-following (3×ATR trail)</i>
 """
         return self.send_sync(message.strip())
 

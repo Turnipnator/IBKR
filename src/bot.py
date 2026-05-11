@@ -238,20 +238,21 @@ class TradingBot:
         if self._last_summary_date == today:
             return
 
-        stats = self.db.get_paper_trade_stats()
-        if stats['total_trades'] == 0:
+        overall = self.db.get_paper_trade_stats()
+        today_stats = self.db.get_today_stats()
+        if overall['total_trades'] == 0 and today_stats['opened_today'] == 0:
             return
 
         if self.notifier and self.notifier.enabled:
             self.notifier.notify_daily_summary(
                 date=today,
-                trades_opened=stats['open_trades'],
-                trades_closed=stats['closed_trades'],
-                winning_trades=stats['winning_trades'],
-                losing_trades=stats['losing_trades'],
-                day_pnl=stats['total_pnl'],
-                total_pnl=stats['total_pnl'],
-                win_rate=stats['win_rate'],
+                trades_opened=today_stats['opened_today'],
+                trades_closed=today_stats['closed_today'],
+                winning_trades=today_stats['won_today'],
+                losing_trades=today_stats['lost_today'],
+                day_pnl=today_stats['realized_pnl_today'],
+                total_pnl=overall['total_pnl'],
+                win_rate=overall['win_rate'],
             )
             self._last_summary_date = today
 
