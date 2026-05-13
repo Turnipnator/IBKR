@@ -10,6 +10,7 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 import logging
+import os
 import time
 import signal
 import sys
@@ -1008,10 +1009,13 @@ def main():
         logger.warning("=" * 50)
         logger.warning("LIVE TRADING MODE - REAL ORDERS WILL BE PLACED")
         logger.warning("=" * 50)
-        response = input("Are you sure? Type 'yes' to confirm: ")
-        if response.lower() != 'yes':
-            logger.info("Cancelled")
+        if os.getenv("IBKR_LIVE_CONFIRMED", "").lower() != "true":
+            logger.error(
+                "Refusing to start live mode: IBKR_LIVE_CONFIRMED=true is not set. "
+                "Set it in .env (alongside --live) to confirm this is intentional."
+            )
             return
+        logger.warning("IBKR_LIVE_CONFIRMED=true — proceeding with live trading")
 
     bot = TradingBot(dry_run=dry_run, run_interval_minutes=args.interval)
 

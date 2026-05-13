@@ -47,6 +47,7 @@ services:
       IBKR_HOST: 127.0.0.1
       IBKR_PORT: ${IBKR_PORT:-4002}  # 4002 for paper, 4001 for live
       IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
+      IBKR_LIVE_CONFIRMED: ${IBKR_LIVE_CONFIRMED:-}
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
@@ -57,7 +58,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - /var/run/docker.sock:/var/run/docker.sock
-    command: ["python", "-m", "src.bot", "--interval", "60"]
+    command: ["python", "-m", "src.bot", "--live", "--interval", "60"]
 
   # Daily Instrument Screener - runs at 14:00 UTC Mon-Fri
   screener:
