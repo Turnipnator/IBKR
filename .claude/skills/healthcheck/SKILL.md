@@ -176,7 +176,28 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "free -h | head -3 && echo '---' && df -h / | tail -1"
 ```
 
-## 13. STRATEGY ASSESSMENT
+## 13. NETWORK SECURITY
+
+Verify the VPS firewall is in place. Locked down on 2026-05-13 after finding VNC (5900), IBKR Gateway API (4001), and socat (4003) all publicly listening with default-password VNC. Only port 22 (SSH) should be allowed inbound.
+
+- **`Status: active`** is mandatory. If it shows `inactive`, the firewall was disabled and the IB Gateway desktop is exposed to the internet again.
+- The allow list should contain **only** `22/tcp` (v4 and v6). Any extra `ALLOW IN` rule means another port has been opened — investigate why.
+- Outbound default must remain `allow` (needed for IBKR API, Telegram long-polling, broker calls).
+
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "ufw status verbose | head -15"
+```
+
+**Optional external sanity check** (run from your local machine, not the VPS):
+
+```bash
+for p in 5900 4001 4003; do
+  nc -z -w 3 149.102.144.190 $p && echo "$p OPEN (BAD)" || echo "$p blocked (good)"
+done
+nc -z -w 3 149.102.144.190 22 && echo "22 OPEN (good)" || echo "22 BLOCKED (BAD)"
+```
+
+## 14. STRATEGY ASSESSMENT
 Based on the data gathered above, assess:
 - Are the TSMOM/CSMOM signals diverse across asset classes? (not concentrated)
 - Is the trailing stop (3x ATR) appropriate for current volatility?
@@ -184,13 +205,13 @@ Based on the data gathered above, assess:
 - Is the drawdown within acceptable limits?
 - Any parameter tweaks recommended?
 
-## 14. RECOMMENDATIONS
+## 15. RECOMMENDATIONS
 Provide prioritised recommendations:
 - P1 (Critical): Issues that need immediate attention
 - P2 (Important): Should be addressed soon
 - P3 (Nice to have): Optimisations for later
 
-## 15. SUMMARY DASHBOARD
+## 16. SUMMARY DASHBOARD
 Present a quick status summary table:
 
 | Check | Status | Notes |
@@ -209,4 +230,5 @@ Present a quick status summary table:
 | Drawdown | | |
 | Logs (errors 24h) | | (count after gateway-reconnect filter) |
 | Resources | | |
+| **Firewall (ufw)** | | (active + only 22 allowed / or flag) |
 | Strategy Edge | | |
