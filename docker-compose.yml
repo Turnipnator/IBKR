@@ -24,11 +24,11 @@ services:
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/4002'"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/${IBKR_PORT:-4002}'"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s
+      start_period: 180s
 
   # Trading Bot
   trading-bot:
