@@ -21,6 +21,8 @@ services:
       # Soft-restart daily before IBKR's forced midnight restart so we don't need fresh 2FA each day
       AUTO_RESTART_TIME: "11:55 PM"
       RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      # Multiple 2FA methods enrolled (IB Key + Mobile Authenticator) — auto-select IB Key for push
+      TWOFA_DEVICE: "IB Key"
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts
     healthcheck:
