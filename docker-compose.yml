@@ -18,6 +18,9 @@ services:
       # Handle existing session - take over from local TWS
       EXISTING_SESSION_DETECTED_ACTION: "primary"
       TWOFA_TIMEOUT_ACTION: "restart"
+      # Soft-restart daily before IBKR's forced midnight restart so we don't need fresh 2FA each day
+      AUTO_RESTART_TIME: "11:55 PM"
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts
     healthcheck:
