@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .connection import ConnectionManager, get_connection
+from .contracts import CONTRACT_REGISTRY
 from .data_fetcher import DataFetcher
 from .database import Database
 from .indicators import (
@@ -188,6 +189,25 @@ class DecisionEngine:
 
         return results
 
+    def _fx_to_base(self, currency: str, fx_rates: dict[str, float]) -> float:
+        """Rate to convert 1 unit of `currency` into base currency.
+
+        For the account base currency this is always 1.0. For others it's the
+        IBKR ExchangeRate value (BASE per 1 CCY). Missing rates fall back to
+        1.0 with a warning — better to size conservatively-in-units than to
+        skip the symbol entirely.
+        """
+        if not currency or currency in ("BASE", ""):
+            return 1.0
+        rate = fx_rates.get(currency)
+        if rate is None:
+            logger.warning(
+                f"FX rate for {currency} not available; assuming 1.0. "
+                f"Sizing for {currency}-denominated symbols may be off."
+            )
+            return 1.0
+        return rate
+
     def _calculate_target_positions(
         self,
         signals: dict[str, dict],
@@ -196,13 +216,24 @@ class DecisionEngine:
         """
         Calculate target position sizes using volatility-scaled sizing.
 
+        Currency handling:
+            `capital` is in the account's base currency (GBP for this account).
+            Prices and ATRs come from IBKR in each contract's local currency
+            (USD for most UCITS, GBP for EQQQ/VEUR/IJPN). Sizing must be done
+            in the contract's local currency to avoid implicit FX errors.
+
+            Per-symbol we convert `capital` -> `capital_local` using IBKR's
+            published ExchangeRate. `target_weight` is computed in BASE so
+            that asset-class and gross-exposure limits compare apples to apples.
+
         Args:
             signals: Dict of symbol -> signal data (from _compute_all_signals)
-            capital: Deployable equity used as the sizing denominator
-                (excludes accrued interest / other paper-account inflation)
+            capital: Deployable equity in BASE currency. Used as the sizing
+                denominator (excludes accrued interest / paper inflation).
 
         Returns:
-            Dict of symbol -> {target_shares, target_weight, direction, stop_price}
+            Dict of symbol -> {target_shares, target_weight, direction, stop_price,
+                               price, atr, currency, fx_to_base}
         """
         threshold = self.config.signal_threshold
         targets = {}
@@ -229,14 +260,23 @@ class DecisionEngine:
             f"Active signals: {total_active}, trading top {len(active_signals)}"
         )
 
+        # FX rates: BASE per 1 CCY. Fetched once per rebalance.
+        fx_rates = self.connection.get_fx_rates()
+        if fx_rates:
+            logger.info(
+                "FX rates (BASE per 1 CCY): "
+                + ", ".join(f"{k}={v:.4f}" for k, v in sorted(fx_rates.items()))
+            )
+
         # Count active positions for risk budget distribution
         num_active = len(active_signals)
-        risk_per_position = (capital * self.config.risk_budget) / num_active
+        # risk_per_position kept in BASE; converted per-symbol below
+        risk_per_position_base = (capital * self.config.risk_budget) / num_active
 
         for symbol, data in active_signals.items():
             combined = data["combined"]
-            price = data["price"]
-            atr_val = data["atr"]
+            price = data["price"]            # in symbol's local currency
+            atr_val = data["atr"]            # in symbol's local currency
             vol = data["volatility"]
 
             if price <= 0 or atr_val <= 0:
@@ -247,18 +287,24 @@ class DecisionEngine:
             if not is_long and not self.config.enable_shorting:
                 continue  # Skip shorts if disabled
 
+            # Currency-aware sizing: convert capital to symbol's local currency
+            ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
+            fx = self._fx_to_base(ccy, fx_rates)  # BASE per 1 CCY
+            capital_local = capital / fx if fx > 0 else capital
+            risk_per_position_local = risk_per_position_base / fx if fx > 0 else risk_per_position_base
+
             # Position size = risk_budget / (ATR * multiplier)
-            # This gives each position equal risk contribution
-            dollar_risk = atr_val * self.config.atr_stop_multiplier
-            if dollar_risk <= 0:
+            # Equal-risk contribution per position. All units in local currency.
+            local_risk = atr_val * self.config.atr_stop_multiplier
+            if local_risk <= 0:
                 continue
 
-            target_value = risk_per_position / (dollar_risk / price)
-            # Clamp to max position size
-            max_value = capital * self.config.max_position_pct
-            target_value = min(target_value, max_value)
+            target_value_local = risk_per_position_local / (local_risk / price)
+            # Clamp to max position size (also in local currency)
+            max_value_local = capital_local * self.config.max_position_pct
+            target_value_local = min(target_value_local, max_value_local)
 
-            target_shares = int(target_value / price)
+            target_shares = int(target_value_local / price)
             if target_shares <= 0:
                 continue
 
@@ -266,13 +312,14 @@ class DecisionEngine:
             if not is_long:
                 target_shares = -target_shares
 
-            # Trailing stop: 3x ATR from current price
+            # Trailing stop: 3x ATR from current price (all in local currency)
             if is_long:
                 stop_price = round(price - self.config.atr_stop_multiplier * atr_val, 2)
             else:
                 stop_price = round(price + self.config.atr_stop_multiplier * atr_val, 2)
 
-            target_weight = (target_shares * price) / capital
+            # Target weight in BASE — comparable across currencies
+            target_weight = (target_shares * price * fx) / capital
 
             targets[symbol] = {
                 "target_shares": target_shares,
@@ -282,9 +329,11 @@ class DecisionEngine:
                 "signal_score": combined,
                 "atr": atr_val,
                 "price": price,
+                "currency": ccy,
+                "fx_to_base": fx,
             }
 
-        # Enforce asset class limits
+        # Enforce asset class limits (uses target_weight already in BASE)
         targets = self._apply_asset_class_limits(targets, capital)
 
         # Enforce gross exposure limit
@@ -295,7 +344,11 @@ class DecisionEngine:
     def _apply_asset_class_limits(
         self, targets: dict, capital: float,
     ) -> dict:
-        """Reduce positions if an asset class exceeds its limit."""
+        """Reduce positions if an asset class exceeds its limit.
+
+        target_weight is in BASE currency (set by _calculate_target_positions),
+        so weight-based scaling works across mixed-currency contracts.
+        """
         max_pct = self.config.max_asset_class_pct
         class_exposure = {}
 
@@ -310,7 +363,9 @@ class DecisionEngine:
                 for symbol, t in targets.items():
                     if (self._get_asset_class(symbol) or "other") == ac:
                         t["target_shares"] = int(t["target_shares"] * scale)
-                        t["target_weight"] = (t["target_shares"] * t["price"]) / capital
+                        t["target_weight"] = (
+                            t["target_shares"] * t["price"] * t["fx_to_base"]
+                        ) / capital
                 logger.info(f"Scaled {ac} from {exposure:.1%} to {max_pct:.1%}")
 
         return targets
@@ -324,7 +379,9 @@ class DecisionEngine:
             scale = self.config.max_gross_exposure / gross
             for t in targets.values():
                 t["target_shares"] = int(t["target_shares"] * scale)
-                t["target_weight"] = (t["target_shares"] * t["price"]) / capital
+                t["target_weight"] = (
+                    t["target_shares"] * t["price"] * t["fx_to_base"]
+                ) / capital
             logger.info(f"Scaled gross exposure from {gross:.1%} to {self.config.max_gross_exposure:.1%}")
         return targets
 
@@ -454,7 +511,9 @@ class DecisionEngine:
             logger.info("REDUCE mode — halving all targets")
             for t in targets.values():
                 t["target_shares"] = int(t["target_shares"] * 0.5)
-                t["target_weight"] = (t["target_shares"] * t["price"]) / sizing_capital
+                t["target_weight"] = (
+                    t["target_shares"] * t["price"] * t["fx_to_base"]
+                ) / sizing_capital
 
         # Generate opportunities (rebalance orders)
         opportunities = []

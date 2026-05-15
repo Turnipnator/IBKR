@@ -203,6 +203,38 @@ class ConnectionManager:
             return []
         return self.ib.managedAccounts()
 
+    def get_fx_rates(self) -> dict[str, float]:
+        """Return {currency: rate_to_base} where rate is BASE-per-1-CCY.
+
+        IBKR's `ExchangeRate` tag in accountSummary() is reported per currency.
+        Value is "how many units of base currency equal 1 unit of CCY".
+        Example for a GBP-base account: USD -> 0.7467 means $1 = £0.7467.
+
+        To convert a base-currency amount into CCY units:
+            ccy_value = base_value / rates[CCY]
+        To convert a CCY-currency amount into base units:
+            base_value = ccy_value * rates[CCY]
+
+        The base currency itself always has rate 1.0. Returns an empty dict
+        on connection failure; callers should fall back to 1.0 in that case.
+        """
+        if not self.ensure_connected():
+            return {}
+        rates: dict[str, float] = {}
+        try:
+            for av in self.ib.accountSummary():
+                if av.tag != "ExchangeRate":
+                    continue
+                if av.currency in ("", "BASE"):
+                    continue
+                try:
+                    rates[av.currency] = float(av.value)
+                except (TypeError, ValueError):
+                    continue
+        except Exception as e:
+            logger.warning(f"Failed to fetch FX rates: {e}")
+        return rates
+
     def get_account_summary(self) -> dict:
         """Get account summary as a dictionary.
 
