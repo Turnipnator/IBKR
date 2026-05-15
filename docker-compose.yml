@@ -52,8 +52,11 @@ services:
       IBKR_HOST: 127.0.0.1
       IBKR_PORT: ${IBKR_PORT:-4002}  # 4002 for paper, 4001 for live
       IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-1}
+      # IBKR_LIVE_CONFIRMED is the SINGLE switch for paper vs live trading inside
+      # the bot. 'true' = real orders, anything else = dry-run. The gateway's
+      # TRADING_MODE env var (set above) is separate — it configures which IBKR
+      # account (paper/live) the gateway logs into, not what the bot does.
       IBKR_LIVE_CONFIRMED: ${IBKR_LIVE_CONFIRMED:-}
-      IBKR_TRADING_MODE: ${IBKR_TRADING_MODE:-paper}  # 'paper' = dry_run, 'live' = real orders
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
@@ -64,8 +67,9 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - /var/run/docker.sock:/var/run/docker.sock
-    # Mode is controlled by IBKR_TRADING_MODE env var (paper|live). Live also
-    # requires IBKR_LIVE_CONFIRMED=true as a second safety gate.
+    # Trading mode is controlled by IBKR_LIVE_CONFIRMED env var.
+    #   IBKR_LIVE_CONFIRMED=true  -> real orders placed
+    #   anything else             -> dry-run (paper_trades table only)
     command: ["python", "-m", "src.bot", "--interval", "60"]
 
   # Daily Instrument Screener - runs at 14:00 UTC Mon-Fri

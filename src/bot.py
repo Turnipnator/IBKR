@@ -1005,24 +1005,28 @@ def main():
     args = parser.parse_args()
     setup_logging(log_file=args.log_file)
 
-    # Live mode can be set via --live flag OR via IBKR_TRADING_MODE=live env var.
-    # The latter is the preferred path inside containers so docker-compose stays
-    # mode-agnostic and .env is the single source of truth.
-    live = args.live or os.getenv("IBKR_TRADING_MODE", "").lower() == "live"
+    # Live mode requires IBKR_LIVE_CONFIRMED=true. Inside containers this is
+    # the single source of truth (no --live flag needed). The --live CLI flag
+    # also enables live, but still requires the env confirmation as a safety gate.
+    # Important: do NOT key off IBKR_TRADING_MODE — that env var configures
+    # the gateway image's login (paper vs live IBKR account) and is unrelated
+    # to whether the bot places real orders.
+    env_confirmed = os.getenv("IBKR_LIVE_CONFIRMED", "").lower() == "true"
+    live = args.live or env_confirmed
     dry_run = not live
     if live:
         logger.warning("=" * 50)
         logger.warning("LIVE TRADING MODE - REAL ORDERS WILL BE PLACED")
         logger.warning("=" * 50)
-        if os.getenv("IBKR_LIVE_CONFIRMED", "").lower() != "true":
+        if not env_confirmed:
             logger.error(
                 "Refusing to start live mode: IBKR_LIVE_CONFIRMED=true is not set. "
-                "Set it in .env (alongside --live) to confirm this is intentional."
+                "Set it in .env to confirm this is intentional."
             )
             return
         logger.warning("IBKR_LIVE_CONFIRMED=true — proceeding with live trading")
     else:
-        logger.info("Running in PAPER/DRY-RUN mode")
+        logger.info("Running in PAPER/DRY-RUN mode (IBKR_LIVE_CONFIRMED != true)")
 
     bot = TradingBot(dry_run=dry_run, run_interval_minutes=args.interval)
 
