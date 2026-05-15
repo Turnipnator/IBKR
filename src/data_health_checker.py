@@ -1,11 +1,12 @@
 """
 Data-farm Health Checker.
 
-Probes IBKR's market data farm using a known-liquid symbol (SPY).
-When the gateway's TCP port is up but the data farm connections have
-died (IBKR Error 162 timeouts), a normal TCP healthcheck doesn't
-catch it. This probe does — and triggers gateway restart + force-
-reconnect when data stops flowing.
+Probes IBKR's market data farm using a known-liquid UCITS symbol (CSPX, the
+LSE-listed S&P 500 UCITS — the analog of SPY for our PRIIPs-compliant universe).
+When the gateway's TCP port is up but the data farm connections have died
+(IBKR Error 162 timeouts), a normal TCP healthcheck doesn't catch it. This
+probe does — and triggers gateway restart + force-reconnect when data stops
+flowing.
 """
 
 import asyncio
@@ -18,11 +19,11 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from ib_insync import Stock
+from .contracts import resolve_contract
 
 logger = logging.getLogger(__name__)
 
-PROBE_SYMBOL = "SPY"
+PROBE_SYMBOL = "CSPX"
 PROBE_TIMEOUT_SEC = 15
 FAILURE_THRESHOLD = 2  # consecutive failures before triggering recovery
 
@@ -65,7 +66,7 @@ class DataHealthChecker:
 
     def probe(self) -> bool:
         """
-        Fetch SPY's last 2 daily bars. Returns True if data flows.
+        Fetch the probe symbol's last 2 daily bars. Returns True if data flows.
 
         Failures (including "not connected") count toward the threshold,
         since a stale connection presents as a data-farm failure too.
@@ -78,7 +79,7 @@ class DataHealthChecker:
             return False
 
         try:
-            contract = Stock(PROBE_SYMBOL, "SMART", "USD")
+            contract = resolve_contract(PROBE_SYMBOL)
             bars = self.connection.ib.reqHistoricalData(
                 contract,
                 endDateTime="",
@@ -95,10 +96,10 @@ class DataHealthChecker:
                     logger.info(
                         f"Data probe recovered after "
                         f"{self._consecutive_failures} failures "
-                        f"(SPY close ${last_close})"
+                        f"({PROBE_SYMBOL} close ${last_close})"
                     )
                 else:
-                    logger.info(f"Data probe OK (SPY close ${last_close})")
+                    logger.info(f"Data probe OK ({PROBE_SYMBOL} close ${last_close})")
                 self._consecutive_failures = 0
                 return True
 

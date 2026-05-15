@@ -1,0 +1,10 @@
+{
+  "version": "v2_ucits",
+  "notes": "UCITS-on-LSE universe. 24 instruments after EU/UK PRIIPs migration from US-listed ETFs. Contract details (currency/exchange) live in src/contracts.py.",
+  "symbols": {
+    "equity":    ["CSPX", "EQQQ", "RTWO", "EIMU", "VEUR", "IJPN", "CNYA"],
+    "bond":      ["DTLA", "IDTM", "IBTA", "LQDE", "IHYU", "JPEA", "IDTP"],
+    "commodity": ["IGLN", "ISLN", "CRUD", "NGAS", "AIGA", "AIGI", "CMOD", "COPA", "AIGS"],
+    "alt":       ["IDUP"]
+  }
+}

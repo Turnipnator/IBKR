@@ -539,6 +539,28 @@ class DecisionEngine:
             reason=f"Trend signal: {opportunity.signal_score:+.2f}",
         )
 
+        # placeOrder() returns synchronously but IBKR rejections (e.g. Error 201
+        # PRIIPs/KID) arrive ~50-200ms later as the order moves to Cancelled.
+        # Wait briefly so the "trades executed" count reflects real fate.
+        if result.success and result.trade is not None:
+            terminal_bad = {"Cancelled", "ApiCancelled", "Inactive"}
+            for _ in range(30):  # up to ~3s
+                self.connection.ib.sleep(0.1)
+                if result.trade.orderStatus.status in terminal_bad:
+                    err = "; ".join(
+                        f"{log.status}:{log.message[:120]}"
+                        for log in result.trade.log
+                        if log.message
+                    ) or result.trade.orderStatus.status
+                    logger.warning(
+                        f"{opportunity.symbol}: order rejected post-submit — {err}"
+                    )
+                    result.success = False
+                    result.message = f"Rejected: {err}"
+                    return result
+                if result.trade.orderStatus.status in ("PreSubmitted", "Submitted", "Filled"):
+                    break
+
         # Attach native trailing stop server-side. Survives bot/gateway crashes
         # AND ratchets up automatically as price moves favourably.
         if result.success and opportunity.stop_loss_price:

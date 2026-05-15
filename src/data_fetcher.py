@@ -16,6 +16,7 @@ import pandas as pd
 from ib_insync import Stock, util
 
 from .connection import ConnectionManager, get_connection
+from .contracts import resolve_contract
 from .config import trading_config
 
 logger = logging.getLogger(__name__)
@@ -57,8 +58,6 @@ class DataFetcher:
         bar_size: str = "1 day",
         what_to_show: str = "TRADES",
         use_rth: bool = True,
-        exchange: str = "SMART",
-        currency: str = "USD",
     ) -> Optional[pd.DataFrame]:
         """
         Fetch historical OHLCV data for a symbol.
@@ -69,8 +68,6 @@ class DataFetcher:
             bar_size: Bar size (e.g., "1 day", "1 hour", "5 mins")
             what_to_show: Data type - TRADES, MIDPOINT, BID, ASK
             use_rth: Use regular trading hours only
-            exchange: Exchange (SMART for best routing)
-            currency: Currency (USD, GBP, etc.)
 
         Returns:
             DataFrame with columns: date, open, high, low, close, volume, average, barCount
@@ -81,10 +78,7 @@ class DataFetcher:
             return None
 
         try:
-            # Create contract
-            contract = Stock(symbol, exchange, currency)
-
-            # Qualify the contract (fills in conId and other details)
+            contract = resolve_contract(symbol)
             qualified = self.connection.ib.qualifyContracts(contract)
             if not qualified:
                 logger.error(f"Could not qualify contract for {symbol}")

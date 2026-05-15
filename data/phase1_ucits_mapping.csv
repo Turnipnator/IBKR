@@ -1,0 +1,31 @@
+sector,us_ticker,ucits_ticker,ucits_conId,currency,primary_exch,trading_class,name,notes
+equity,SPY,CSPX,296547834,USD,LSEETF,,iShares Core S&P 500 UCITS USD Acc,direct USD-class match
+equity,QQQ,EQQQ,35628280,GBP,LSEETF,,Invesco Nasdaq-100 UCITS,USD-class only on EBS (Swiss); using GBP-class on LSE
+equity,IWM,RTWO,,USD,LSEETF,,SPDR Russell 2000 US Small Cap UCITS USD,direct USD-class match
+equity,EFA,,,,,,DROPPED — redundant with VGK + EWJ + FXI (no clean EAFE UCITS),drop recommendation
+equity,EEM,EIMU,310169235,USD,LSEETF,,iShares Core MSCI EM IMI UCITS USD Acc,direct USD-class match (Phase 0 validated)
+equity,VGK,VEUR,128494604,GBP,LSEETF,,Vanguard FTSE Developed Europe UCITS,USD-class on EBS only; using GBP-class on LSE
+equity,EWJ,IJPN,31308315,GBP,LSEETF,,iShares MSCI Japan UCITS,USD-class MXJP exists but trades only ~16/60 days; using GBP-class IJPN for liquidity
+equity,FXI,CNYA,,USD,LSEETF,,iShares MSCI China A UCITS USD Acc,note: China A-shares (mainland) vs FXI's H-shares (HK)
+bond,TLT,DTLA,,USD,LSEETF,,iShares $ Treasury Bond 20+yr UCITS USD Dist,direct USD-class match
+bond,IEF,IDTM,,USD,LSEETF,,iShares $ Treasury Bond 7-10yr UCITS USD Dist,direct USD-class match
+bond,SHY,IBTA,,USD,LSEETF,,iShares $ Treasury Bond 1-3yr UCITS USD Dist,direct USD-class match
+bond,LQD,LQDE,,USD,LSEETF,,iShares $ Corp Bond UCITS USD Dist,direct USD-class match
+bond,HYG,IHYU,,USD,LSEETF,,iShares $ High Yield Corp Bond UCITS USD Dist,direct USD-class match
+bond,EMB,JPEA,,USD,LSEETF,,JPM USD EM Sovereign Bond UCITS USD Dist,direct USD-class match
+bond,TIP,IDTP,,USD,LSEETF,,iShares $ TIPS UCITS USD Dist,direct USD-class match
+commodity,GLD,IGLN,86656182,USD,LSEETF,,iShares Physical Gold ETC USD,direct USD-class match (Phase 0 validated)
+commodity,SLV,ISLN,,USD,LSEETF,,iShares Physical Silver ETC USD,direct USD-class match
+commodity,USO,CRUD,,USD,LSEETF,,WisdomTree WTI Crude Oil USD,ETC
+commodity,UNG,NGAS,,USD,LSEETF,,WisdomTree Natural Gas USD,ETC
+commodity,DBA,AIGA,,USD,LSEETF,,WisdomTree Agriculture USD,ETC
+commodity,DBB,AIGI,,USD,LSEETF,,WisdomTree Industrial Metals USD,ETC
+commodity,PDBC,CMOD,,USD,LSEETF,,WisdomTree Broad Commodities USD,closest broad-commodity UCITS
+commodity,CPER,COPA,,USD,LSEETF,,WisdomTree Copper USD,ETC
+commodity,DBC,AIGS,,USD,LSEETF,,WisdomTree Broad Commodities USD,direct USD-class match
+fx,UUP,,,,,,DROPPED — no UCITS retail USD bullish ETP on LSE,drop
+fx,FXE,,,,,,DROPPED — no UCITS retail EUR currency ETP on LSE,drop
+fx,FXY,,,,,,DROPPED — no UCITS retail JPY currency ETP on LSE,drop
+fx,FXB,,,,,,DROPPED — no UCITS retail GBP currency ETP on LSE,drop
+alt,VNQ,IDUP,46625987,USD,LSEETF,,iShares US Property Yield UCITS USD Dist,direct USD-class match
+alt,BITO,,,,,,DROPPED — FCA prohibits crypto ETPs for UK retail since 2021,drop

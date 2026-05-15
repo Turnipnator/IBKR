@@ -1,6 +1,6 @@
 """
 Main Trading Bot - Trend-following / momentum strategy.
-Daily rebalance at 15:30 ET with intraday risk checks.
+Daily rebalance at 14:00 Europe/London (mid-LSE session) with intraday risk checks.
 """
 
 import asyncio
@@ -36,7 +36,7 @@ class TradingBot:
     Trend-following trading bot with daily rebalance scheduling.
 
     Schedule:
-    - Daily rebalance at 15:30 ET (configurable)
+    - Daily rebalance at 14:00 Europe/London (mid-LSE session, configurable)
     - Intraday risk checks every 4 hours (trailing stops, drawdown)
     - Checks for Telegram commands continuously
 
@@ -45,9 +45,10 @@ class TradingBot:
         bot.run_scheduled()
     """
 
-    MARKET_OPEN = dtime(9, 30)
-    MARKET_CLOSE = dtime(16, 0)
-    US_EASTERN = ZoneInfo("America/New_York")
+    # LSE trading hours (local Europe/London — handles BST/GMT automatically)
+    MARKET_OPEN = dtime(8, 0)
+    MARKET_CLOSE = dtime(16, 30)
+    MARKET_TZ = ZoneInfo("Europe/London")
 
     def __init__(
         self,
@@ -99,16 +100,16 @@ class TradingBot:
         self.running = False
 
     def _is_market_hours(self) -> bool:
-        """Check if currently within US market hours."""
-        now_et = datetime.now(self.US_EASTERN)
-        if now_et.weekday() >= 5:
+        """Check if currently within LSE market hours."""
+        now_local = datetime.now(self.MARKET_TZ)
+        if now_local.weekday() >= 5:
             return False
-        return self.MARKET_OPEN <= now_et.time() <= self.MARKET_CLOSE
+        return self.MARKET_OPEN <= now_local.time() <= self.MARKET_CLOSE
 
     def _is_rebalance_time(self) -> bool:
         """Check if it's time for the daily rebalance."""
-        now_et = datetime.now(self.US_EASTERN)
-        today = now_et.strftime('%Y-%m-%d')
+        now_local = datetime.now(self.MARKET_TZ)
+        today = now_local.strftime('%Y-%m-%d')
 
         # Already rebalanced today
         if self._last_rebalance_date == today:
@@ -119,7 +120,7 @@ class TradingBot:
             trading_config.rebalance_minute,
         )
         # Trigger within a 5-minute window of the rebalance time
-        current = now_et.time()
+        current = now_local.time()
         target_minutes = rebalance_time.hour * 60 + rebalance_time.minute
         current_minutes = current.hour * 60 + current.minute
         return 0 <= (current_minutes - target_minutes) < 5
@@ -235,7 +236,7 @@ class TradingBot:
 
     def _send_daily_summary(self):
         """Send daily summary at market close."""
-        today = datetime.now(self.US_EASTERN).strftime('%Y-%m-%d')
+        today = datetime.now(self.MARKET_TZ).strftime('%Y-%m-%d')
         if self._last_summary_date == today:
             return
 
@@ -893,7 +894,7 @@ class TradingBot:
         mode = "DRY RUN" if self.dry_run else "LIVE TRADING"
         strategy = "TREND-FOLLOWING"
         logger.info(f"Bot started — {strategy} mode: {mode}")
-        logger.info(f"Rebalance: {trading_config.rebalance_hour}:{trading_config.rebalance_minute:02d} ET daily")
+        logger.info(f"Rebalance: {trading_config.rebalance_hour}:{trading_config.rebalance_minute:02d} {self.MARKET_TZ} daily")
         logger.info(f"Risk checks: every {trading_config.risk_check_interval_hours}h")
 
         if self.notifier and self.notifier.enabled:
@@ -908,10 +909,10 @@ class TradingBot:
 
         try:
             while self.running:
-                now_et = datetime.now(self.US_EASTERN)
+                now_local = datetime.now(self.MARKET_TZ)
 
-                # Daily summary near close
-                if now_et.hour == 15 and now_et.minute >= 55:
+                # Daily summary near LSE close (16:30 local)
+                if now_local.hour == 16 and now_local.minute >= 25:
                     self._send_daily_summary()
 
                 # Outside market hours — just check Telegram commands
@@ -932,7 +933,7 @@ class TradingBot:
                     continue
 
                 # Data-farm health probe (runs every 5 min; auto-restarts
-                # gateway if SPY data requests time out)
+                # gateway if CSPX data requests time out)
                 if self.data_health.should_probe():
                     self.data_health.check_and_heal()
 
@@ -940,7 +941,7 @@ class TradingBot:
                 if self._is_rebalance_time():
                     logger.info("=== DAILY REBALANCE ===")
                     self.run_once()
-                    self._last_rebalance_date = now_et.strftime('%Y-%m-%d')
+                    self._last_rebalance_date = now_local.strftime('%Y-%m-%d')
                     self._last_rebalance_at = datetime.now()
                     self._last_risk_check = datetime.now()
 
@@ -1004,8 +1005,12 @@ def main():
     args = parser.parse_args()
     setup_logging(log_file=args.log_file)
 
-    dry_run = not args.live
-    if args.live:
+    # Live mode can be set via --live flag OR via IBKR_TRADING_MODE=live env var.
+    # The latter is the preferred path inside containers so docker-compose stays
+    # mode-agnostic and .env is the single source of truth.
+    live = args.live or os.getenv("IBKR_TRADING_MODE", "").lower() == "live"
+    dry_run = not live
+    if live:
         logger.warning("=" * 50)
         logger.warning("LIVE TRADING MODE - REAL ORDERS WILL BE PLACED")
         logger.warning("=" * 50)
@@ -1016,6 +1021,8 @@ def main():
             )
             return
         logger.warning("IBKR_LIVE_CONFIRMED=true — proceeding with live trading")
+    else:
+        logger.info("Running in PAPER/DRY-RUN mode")
 
     bot = TradingBot(dry_run=dry_run, run_interval_minutes=args.interval)
 

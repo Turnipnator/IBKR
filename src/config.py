@@ -111,13 +111,17 @@ class TradingConfig:
     bar_size: str = "1 day"        # Daily bars for trend following
     data_duration: str = "1 Y"     # 1 year of history for lookbacks
 
-    # Scheduling
-    rebalance_hour: int = 15       # Rebalance at 3:30 PM ET
-    rebalance_minute: int = 30
+    # Scheduling — Europe/London local time (LSE session is 08:00-16:30)
+    rebalance_hour: int = 14       # 14:00 London = mid-LSE session
+    rebalance_minute: int = 0
     risk_check_interval_hours: int = 4  # Check trailing stops every 4 hours
 
     # Max open positions — top-N by signal strength (enforced in engine._calculate_target_positions)
     max_open_positions: int = 8
+
+    # Universe version — bump when the instrument set changes; useful for
+    # cross-referencing portfolio snapshots vs. the universe in effect at the time.
+    instrument_universe_version: str = "v2_ucits"
 
 
 @dataclass

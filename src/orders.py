@@ -21,6 +21,7 @@ from ib_insync import (
 )
 
 from .connection import ConnectionManager, get_connection
+from .contracts import resolve_contract
 from .database import Database
 from .config import trading_config
 
@@ -86,14 +87,9 @@ class OrderManager:
     def ib(self) -> IB:
         return self.connection.ib
 
-    def _create_contract(
-        self,
-        symbol: str,
-        exchange: str = "SMART",
-        currency: str = "USD",
-    ) -> Stock:
-        """Create and qualify a stock contract."""
-        contract = Stock(symbol, exchange, currency)
+    def _create_contract(self, symbol: str) -> Stock:
+        """Create and qualify a UCITS contract via the registry."""
+        contract = resolve_contract(symbol)
         qualified = self.ib.qualifyContracts(contract)
         if not qualified:
             raise ValueError(f"Could not qualify contract for {symbol}")
