@@ -304,7 +304,16 @@ class DecisionEngine:
             max_value_local = capital_local * self.config.max_position_pct
             target_value_local = min(target_value_local, max_value_local)
 
-            target_shares = int(target_value_local / price)
+            # Round to nearest whole share, not floor. int() truncation
+            # systematically under-sizes every position; at small capital that
+            # bias is large on high-priced names (e.g. a $54 ETF at £2.5k buys
+            # only ~4 shares, so flooring loses up to ~25% of the intended size).
+            # The per-position cap is re-checked immediately below and aggregate
+            # gross exposure is clamped downstream, so rounding up can't breach
+            # either limit.
+            target_shares = round(target_value_local / price)
+            if target_shares * price > max_value_local:
+                target_shares = int(max_value_local / price)  # never exceed 15% cap
             if target_shares <= 0:
                 continue
 
