@@ -30,6 +30,25 @@ _DEFAULT_UNIVERSE = {
 _WATCHLIST_PATH = Path(os.getenv("WATCHLIST_PATH", "data/watchlist.json"))
 
 
+# ISO-4217 code -> display symbol. Used to label account-level values, which
+# IBKR reports in the account base currency (GBP for this account), not USD.
+_CURRENCY_SYMBOLS = {
+    "USD": "$", "GBP": "£", "EUR": "€", "JPY": "¥",
+    "CAD": "C$", "AUD": "A$", "CHF": "CHF ",
+}
+
+
+def currency_symbol(code: str | None) -> str:
+    """Map an ISO-4217 currency code to its display symbol.
+
+    Falls back to '<CODE> ' for unknown codes, and '$' when no code is given
+    (so existing call sites degrade to prior behaviour rather than crashing).
+    """
+    if not code:
+        return "$"
+    return _CURRENCY_SYMBOLS.get(code.upper(), f"{code.upper()} ")
+
+
 def _load_watchlist() -> dict:
     """Load symbols from watchlist.json if it exists, otherwise use defaults."""
     try:

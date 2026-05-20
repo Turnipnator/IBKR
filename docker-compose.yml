@@ -72,25 +72,41 @@ services:
     #   anything else             -> dry-run (paper_trades table only)
     command: ["python", "-m", "src.bot", "--interval", "60"]
 
-  # Daily Instrument Screener - runs at 14:00 UTC Mon-Fri
-  screener:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: screener
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-      WATCHLIST_PATH: /app/data/watchlist.json
-      DATA_DIR: /app/data
-      LOG_DIR: /app/logs
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./screener-cron.sh:/app/screener-cron.sh:ro
-    command: ["bash", "/app/screener-cron.sh"]
+  # Daily Instrument Screener - DISABLED 2026-05-20.
+  #
+  # The screener's universe (src/screener.py) is the OLD US-listed ETF set
+  # (SPY, QQQ, GLD, ...) and it OVERWRITES data/watchlist.json on every run.
+  # Since the live migration to UCITS-on-LSE (v2_ucits), re-enabling it as-is
+  # would clobber the curated UCITS watchlist with US tickers, which the bot
+  # would then try to trade -> IBKR Error 201 (PRIIPs/KID) in live mode.
+  #
+  # The bot does NOT need the screener: the engine computes its own TSMOM +
+  # CSMOM signals from IBKR daily bars each rebalance and selects the top N
+  # from the static watchlist. The screener only pre-validated liquidity and
+  # produced a daily Telegram scan summary.
+  #
+  # To re-enable: first port src/screener.py's UNIVERSE to the UCITS symbols
+  # and a data source that covers LSE (yfinance .L tickers or IBKR), then
+  # uncomment this block.
+  #
+  # screener:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: screener
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   environment:
+  #     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+  #     TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+  #     WATCHLIST_PATH: /app/data/watchlist.json
+  #     DATA_DIR: /app/data
+  #     LOG_DIR: /app/logs
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./logs:/app/logs
+  #     - ./screener-cron.sh:/app/screener-cron.sh:ro
+  #   command: ["bash", "/app/screener-cron.sh"]
 
 volumes:
   ib-gateway-data:

@@ -676,6 +676,7 @@ class PositionManager:
                 return 0.0
 
         summary = self.connection.get_account_summary()
+        base_ccy = (summary.get('NetLiquidation', {}) or {}).get('currency') or ''
         net_liq = _num('NetLiquidation')
         total_cash = _num('TotalCashValue')
         gross_positions = _num('GrossPositionValue')
@@ -689,6 +690,7 @@ class PositionManager:
         )
 
         return {
+            'currency': base_ccy,
             'net_liquidation': net_liq,
             'total_cash': total_cash,
             'gross_position_value': gross_positions,

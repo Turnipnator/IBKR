@@ -542,6 +542,7 @@ Bot is now monitoring the market.
         currency_resolver=None,
         account_fetcher=None,
         status_fetcher=None,
+        positions_provider=None,
     ) -> Optional[str]:
         """
         Process a command and return the response.
@@ -553,6 +554,7 @@ Bot is now monitoring the market.
             currency_resolver: Optional callable returning the ISO-4217 base currency code
             account_fetcher: Optional callable returning a dict of live IBKR account summary values
             status_fetcher: Optional callable returning a dict of bot health/state
+            positions_provider: Optional callable returning live IBKR positions (live mode only)
 
         Returns:
             Response message or None if not a command
@@ -563,7 +565,7 @@ Bot is now monitoring the market.
         command = text.split()[0].lower()
 
         if command in ["/status", "/positions", "/pos"]:
-            return self._handle_positions_command(db, price_fetcher)
+            return self._handle_positions_command(db, price_fetcher, positions_provider)
         elif command in ["/stats", "/performance"]:
             return self._handle_stats_command(db, currency_resolver)
         elif command == "/balance":
@@ -581,16 +583,32 @@ Bot is now monitoring the market.
 
         return None
 
-    def _handle_positions_command(self, db, price_fetcher=None) -> str:
-        """Handle /positions command - show open paper trades with P&L."""
-        if db is None:
+    def _handle_positions_command(self, db, price_fetcher=None, positions_provider=None) -> str:
+        """Handle /positions command - show open positions with P&L.
+
+        In live mode the bot passes a positions_provider that returns the real
+        IBKR positions (normalised to the paper-trade shape); in dry-run it
+        returns None and we fall back to the paper_trades table.
+        """
+        live = None
+        if positions_provider is not None:
+            try:
+                live = positions_provider()
+            except Exception as e:
+                logger.warning(f"Live positions provider failed: {e}")
+                live = None
+
+        is_live = live is not None
+        label = "live" if is_live else "paper"
+
+        if not is_live and db is None:
             return "\u26A0\uFE0F Cannot fetch positions - no database connection"
 
         try:
-            trades = db.get_open_paper_trades()
+            trades = live if is_live else db.get_open_paper_trades()
 
             if not trades:
-                return "\U0001F4CB <b>Open Positions</b>\n\nNo open paper trades."
+                return f"\U0001F4CB <b>Open Positions</b>\n\nNo open {label} positions."
 
             # Fetch current prices if price_fetcher available
             current_prices = {}
@@ -610,7 +628,8 @@ Bot is now monitoring the market.
                 lines.append(
                     "\U0001F6A8 <b>IBKR disconnected</b> - showing positions without live prices.\n"
                 )
-            lines.append(f"\U0001F4CB <b>Open Positions</b> ({len(trades)})\n")
+            mode_tag = "\U0001F525 LIVE" if is_live else "\U0001F9EA PAPER"
+            lines.append(f"\U0001F4CB <b>Open Positions</b> ({len(trades)}) — {mode_tag}\n")
             total_entry_value = 0
             total_current_value = 0
             total_pnl = 0
@@ -1186,6 +1205,7 @@ def check_telegram_commands(
     currency_resolver=None,
     account_fetcher=None,
     status_fetcher=None,
+    positions_provider=None,
 ) -> None:
     """
     Check for and process any pending Telegram commands.
@@ -1197,6 +1217,7 @@ def check_telegram_commands(
         currency_resolver: Optional callable returning the ISO-4217 base currency code
         account_fetcher: Optional callable returning a dict of live IBKR account summary values
         status_fetcher: Optional callable returning a dict of bot health/state
+        positions_provider: Optional callable returning live IBKR positions (live mode only)
     """
     global _last_update_id
 
@@ -1225,6 +1246,7 @@ def check_telegram_commands(
                 currency_resolver,
                 account_fetcher,
                 status_fetcher,
+                positions_provider,
             )
             if response:
                 notifier.send_sync(response)

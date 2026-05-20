@@ -23,7 +23,7 @@ import pandas as pd
 from .connection import ConnectionManager
 from .engine import DecisionEngine
 from .database import Database
-from .config import ibkr_config, telegram_config, trading_config
+from .config import ibkr_config, telegram_config, trading_config, currency_symbol
 from .telegram_bot import TelegramNotifier, get_notifier, check_telegram_commands
 from .gateway_monitor import GatewayMonitor
 from .data_health_checker import DataHealthChecker
@@ -269,6 +269,43 @@ class TradingBot:
         if code:
             self._base_currency = code
         return self._base_currency
+
+    def _get_live_positions(self):
+        """Live IBKR positions normalised to the paper-trade shape for /positions.
+
+        Returns None in dry-run (so the Telegram handler falls back to the
+        paper_trades table) and None on any error. In live mode it returns a
+        list (possibly empty) of real held positions, with the active trailing
+        stop price attached where one exists.
+        """
+        if self.dry_run:
+            return None
+        if not self.connection.ensure_connected():
+            return None
+        try:
+            # Map symbol -> active protective stop price (TRAIL/STP), if any.
+            stops: dict[str, float] = {}
+            for tr in self.connection.ib.openTrades():
+                o = tr.order
+                sp = getattr(o, "trailStopPrice", None) or getattr(o, "auxPrice", None)
+                if sp:
+                    stops[tr.contract.symbol] = sp
+            out = []
+            for p in self.engine.position_manager.get_positions():
+                if p.quantity == 0:
+                    continue
+                out.append({
+                    "symbol": p.symbol,
+                    "quantity": abs(p.quantity),
+                    "action": "BUY" if p.quantity > 0 else "SELL",
+                    "entry_price": p.avg_cost,
+                    "stop_loss": stops.get(p.symbol),
+                    "take_profit": None,
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"Could not build live positions: {e}")
+            return None
 
     def _get_account_summary(self) -> dict:
         """Return the live IBKR account summary for /balance. Empty if not connected."""
@@ -730,22 +767,23 @@ class TradingBot:
             logger.debug(f"NLV reconcile: bad NetLiquidation value '{nlv_str}'")
             return None
 
+        cur = currency_symbol(nlv_entry.get("currency"))
         snap = self.db.get_latest_portfolio_snapshot()
         if not snap or not snap.get("equity") or snap["equity"] <= 0:
-            logger.info(f"NLV reconcile: live ${live_nlv:,.2f}, no snapshot to compare")
+            logger.info(f"NLV reconcile: live {cur}{live_nlv:,.2f}, no snapshot to compare")
             return None
 
         last_equity = float(snap["equity"])
         drift = abs(live_nlv - last_equity) / last_equity
         self._last_nlv_drift = drift
         logger.info(
-            f"NLV reconcile: live ${live_nlv:,.2f} vs snapshot ${last_equity:,.2f} "
+            f"NLV reconcile: live {cur}{live_nlv:,.2f} vs snapshot {cur}{last_equity:,.2f} "
             f"({snap.get('created_at')}) drift={drift:.2%}"
         )
         if drift >= drift_threshold:
             msg = (
-                f"NLV drift {drift:.1%} — live ${live_nlv:,.2f} vs last snapshot "
-                f"${last_equity:,.2f} (threshold {drift_threshold:.0%}). "
+                f"NLV drift {drift:.1%} — live {cur}{live_nlv:,.2f} vs last snapshot "
+                f"{cur}{last_equity:,.2f} (threshold {drift_threshold:.0%}). "
                 f"Investigate: stale feed, manual trade, or fee/transfer."
             )
             logger.warning(f"NLV reconcile: {msg}")
@@ -825,17 +863,18 @@ class TradingBot:
         realized, unrealized = self._compute_session_pnl()
         session = realized + unrealized
         limit = -abs(trading_config.max_daily_loss)
+        cur = currency_symbol(self._get_base_currency())
         logger.info(
-            f"Daily P&L: realized=${realized:+,.2f} unreal=${unrealized:+,.2f} "
-            f"session=${session:+,.2f} (limit ${limit:,.2f})"
+            f"Daily P&L: realized={cur}{realized:+,.2f} unreal={cur}{unrealized:+,.2f} "
+            f"session={cur}{session:+,.2f} (limit {cur}{limit:,.2f})"
         )
 
         if session <= limit:
             if self._daily_loss_halt_date != today:
                 self._daily_loss_halt_date = today
                 msg = (
-                    f"DAILY LOSS HALT — session P&L ${session:+,.2f} breaches "
-                    f"limit ${limit:,.2f}. New entries blocked for the rest of "
+                    f"DAILY LOSS HALT — session P&L {cur}{session:+,.2f} breaches "
+                    f"limit {cur}{limit:,.2f}. New entries blocked for the rest of "
                     f"the day. Existing positions remain (trail-stops still active)."
                 )
                 logger.warning(msg)
@@ -928,6 +967,7 @@ class TradingBot:
                             self._get_base_currency,
                             self._get_account_summary,
                             self._get_bot_status,
+                            self._get_live_positions,
                         )
                         time.sleep(3)
                     continue
@@ -965,6 +1005,7 @@ class TradingBot:
                         self._get_base_currency,
                         self._get_account_summary,
                         self._get_bot_status,
+                        self._get_live_positions,
                     )
                     time.sleep(3)
 

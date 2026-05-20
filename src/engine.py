@@ -25,7 +25,7 @@ from .indicators import (
     rank_cross_sectional, compute_combined_signal,
 )
 from .orders import OrderManager, PositionManager, OrderAction, OrderResult
-from .config import trading_config, TradingConfig
+from .config import trading_config, TradingConfig, currency_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -662,13 +662,16 @@ class DecisionEngine:
         ]
 
         portfolio = self.position_manager.get_portfolio_value()
+        # Account-level values are reported in the account base currency (GBP
+        # for this account), not USD — label them accordingly.
+        base = currency_symbol(portfolio.get('currency'))
         lines.extend([
             "PORTFOLIO:",
-            f"  Net Liquidation:  ${portfolio.get('net_liquidation', 0):,.2f}",
-            f"  Sizing Capital:   ${portfolio.get('sizing_capital', 0):,.2f}",
-            f"  Accrued Cash:     ${portfolio.get('accrued_cash', 0):,.2f}",
-            f"  Buying Power:     ${portfolio.get('buying_power', 0):,.2f}",
-            f"  Unrealized P&L:   ${portfolio.get('unrealized_pnl', 0):,.2f}",
+            f"  Net Liquidation:  {base}{portfolio.get('net_liquidation', 0):,.2f}",
+            f"  Sizing Capital:   {base}{portfolio.get('sizing_capital', 0):,.2f}",
+            f"  Accrued Cash:     {base}{portfolio.get('accrued_cash', 0):,.2f}",
+            f"  Buying Power:     {base}{portfolio.get('buying_power', 0):,.2f}",
+            f"  Unrealized P&L:   {base}{portfolio.get('unrealized_pnl', 0):,.2f}",
             f"  Drawdown:         {self.state.current_drawdown:.1%}",
             "",
         ])
@@ -677,9 +680,11 @@ class DecisionEngine:
         lines.append("POSITIONS:")
         if positions:
             for pos in positions:
+                # Per-position price/PnL are in the instrument's local currency.
+                local = currency_symbol(CONTRACT_REGISTRY.get(pos.symbol, ("USD",))[0])
                 lines.append(
-                    f"  {pos.symbol}: {pos.quantity} shares @ ${pos.avg_cost:.2f} "
-                    f"(P&L: ${pos.unrealized_pnl:,.2f})"
+                    f"  {pos.symbol}: {pos.quantity} shares @ {local}{pos.avg_cost:.2f} "
+                    f"(P&L: {local}{pos.unrealized_pnl:,.2f})"
                 )
         else:
             lines.append("  No open positions")
