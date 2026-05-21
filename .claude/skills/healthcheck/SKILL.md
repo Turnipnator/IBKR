@@ -10,34 +10,35 @@ Run a comprehensive health check on the IBKR trading bot. Work through each sect
 ## VPS Details
 - Server: 149.102.144.190
 - SSH Key: ~/.ssh/id_ed25519_vps
-- Containers: ib-gateway, trading-bot, screener
+- Containers: ib-gateway, trading-bot
 - Path: /root/IBKR_Bot
 
+> Note: a third container `ig-trading-bot` may also be running on this VPS — that
+> is a **separate Hyperliquid bot**, not part of this project. Ignore it here.
+
 ## 1. PROCESS STATUS
-- Are all THREE containers running? (ib-gateway, trading-bot, screener)
+- Are both containers running? (ib-gateway, trading-bot)
 - How long have they been running (uptime)?
 - Any recent restarts or crashes?
-- **When was the last intraday risk check?** (should fire every 4h; alarm if >5h ago during US market hours 14:30–21:00 UTC)
+- **When was the last intraday risk check?** (should fire every 4h; alarm if >5h ago during LSE hours ~07:00–15:30 UTC)
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'ib-gateway|trading-bot|screener'"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'ib-gateway|trading-bot'"
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep 'Intraday risk check' | tail -1"
 ```
 
 ## 2. LOG ANALYSIS
 - Check the last 100 lines of bot logs for errors, warnings, or anomalies
-- Check screener logs for last run status
 - Check IB Gateway connection status
 - **Unhandled errors in the last 24h** — gateway reconnects are auto-recovered and filtered out; anything that survives the filter is an actual problem (e.g. `Bot error:`, NameError, KeyError)
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot --tail 100 2>&1"
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs screener --tail 30 2>&1"
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot --since 24h 2>&1 | grep -E 'ERROR|CRITICAL|Bot error:|Traceback' | grep -vE 'Connection timed out|Reconnection attempt|API connection failed|Failed to reconnect|Disconnected from IBKR' | tail -20"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot --since 24h 2>&1 | grep -E 'ERROR|CRITICAL|Bot error:|Traceback' | grep -vE 'Connection timed out|Connection reset by peer|Reconnection attempt|API connection failed|Failed to reconnect|Disconnected from IBKR' | tail -20"
 ```
 
 ## 3. REBALANCE STATUS
-- Did today's daily rebalance happen? (scheduled for 15:30 ET / 19:30 UTC)
+- Did today's daily rebalance happen? (scheduled ~13:00 UTC, during LSE hours)
 - When was the last rebalance?
 - How many instruments were analyzed?
 
@@ -45,26 +46,17 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot --sin
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep -E 'DAILY REBALANCE|Analysis complete|Rebalance:' | tail -10"
 ```
 
-## 4. SCREENER & WATCHLIST
-- When did the screener last run?
-- What does the current watchlist look like?
-- How many LONG / SHORT / FLAT signals?
+## 4. SCREENER & WATCHLIST  *(retired)*
 
-```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cat /root/IBKR_Bot/data/watchlist.json | python3 -c \"
-import json, sys
-d = json.load(sys.stdin)
-print('Strategy:', d.get('strategy', 'N/A'))
-print('Updated:', d['updated_at'])
-total = sum(len(v) for v in d['symbols'].values())
-print('Instruments:', total)
-sigs = d.get('signals', {})
-longs = sum(1 for s in sigs.values() if s['tsmom_score'] > 0.3)
-shorts = sum(1 for s in sigs.values() if s['tsmom_score'] < -0.3)
-flat = len(sigs) - longs - shorts
-print('Long:', longs, '| Short:', shorts, '| Flat:', flat)
-\""
-```
+The screener container and `data/watchlist.json` were retired when the bot
+migrated to the fixed UCITS-on-LSE universe — the screener still pointed at the
+old US universe and would clobber the watchlist (Error 201; see memory
+`project_screener_us_landmine`). There is no `screener` container and
+`watchlist.json` is orphaned, so there is nothing to check here.
+
+Live signals for the full fixed universe are recorded in the `instrument_signals`
+DB table — **section 5 below covers what this section used to**, sourced directly
+from the engine rather than the dead watchlist file.
 
 ## 5. INSTRUMENT SIGNALS
 - Check the latest TSMOM/CSMOM signals from the database
@@ -141,7 +133,7 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 
 
 ## 9. DAILY-LOSS HALT
 
-Tracks today's realized + unrealized P&L. If `session_pnl <= -max_daily_loss` (default −$300), new entries are blocked for the rest of the day (existing positions remain — trail-stops still active). Auto-clears at midnight.
+Tracks today's realized + unrealized P&L. If `session_pnl <= -max_daily_loss` (see `max_daily_loss` in `src/config.py`; currently −£101, hardcoded for £2.5k capital), new entries are blocked for the rest of the day (existing positions remain — trail-stops still active). Auto-clears at midnight.
 
 - The `Daily P&L:` log line fires at every risk check and at every rebalance — you'll always see today's running number.
 - `DAILY LOSS HALT` only fires once per day on first breach (Telegram alert).
@@ -218,8 +210,7 @@ Present a quick status summary table:
 |-------|--------|-------|
 | IB Gateway | | |
 | Trading Bot | | |
-| Screener | | |
-| Watchlist/Signals | | |
+| Signals | | (instruments recorded today + concentration) |
 | Rebalance | | |
 | Last Risk Check | | (timestamp + age) |
 | Open Positions | | |
