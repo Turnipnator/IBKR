@@ -607,31 +607,48 @@ class DecisionEngine:
             reason=f"Trend signal: {opportunity.signal_score:+.2f}",
         )
 
-        # placeOrder() returns synchronously but IBKR rejections (e.g. Error 201
-        # PRIIPs/KID) arrive ~50-200ms later as the order moves to Cancelled.
-        # Wait briefly so the "trades executed" count reflects real fate.
+        # placeOrder() returns synchronously, but the BUY isn't on the books
+        # until it FILLS. Attaching the protective SELL before the fill makes
+        # IBKR read it as opening a short → Error 201 on a cash account (this
+        # left 4 of 8 positions naked on the 2026-05-22 live cutover). So wait
+        # for a terminal outcome — Filled (good) or a rejection (bad) — before
+        # attaching the stop. Breaking on Submitted/PreSubmitted was the bug:
+        # those mean "accepted by IBKR", not "I now hold shares".
+        filled = False
         if result.success and result.trade is not None:
             terminal_bad = {"Cancelled", "ApiCancelled", "Inactive"}
-            for _ in range(30):  # up to ~3s
+            for _ in range(50):  # up to ~5s; RTH market orders fill in <1s
                 self.connection.ib.sleep(0.1)
-                if result.trade.orderStatus.status in terminal_bad:
+                status = result.trade.orderStatus.status
+                if status in terminal_bad:
                     err = "; ".join(
                         f"{log.status}:{log.message[:120]}"
                         for log in result.trade.log
                         if log.message
-                    ) or result.trade.orderStatus.status
+                    ) or status
                     logger.warning(
                         f"{opportunity.symbol}: order rejected post-submit — {err}"
                     )
                     result.success = False
                     result.message = f"Rejected: {err}"
                     return result
-                if result.trade.orderStatus.status in ("PreSubmitted", "Submitted", "Filled"):
+                if status == "Filled":
+                    filled = True
                     break
+            if not filled:
+                # BUY accepted but unfilled within the window — do NOT attach a
+                # naked stop (it'd be rejected as a short). The next risk-check
+                # reconcile places the stop once the fill lands.
+                logger.warning(
+                    f"{opportunity.symbol}: BUY not filled within wait window "
+                    f"(status={result.trade.orderStatus.status}); "
+                    f"stop deferred to reconcile"
+                )
 
         # Attach native trailing stop server-side. Survives bot/gateway crashes
-        # AND ratchets up automatically as price moves favourably.
-        if result.success and opportunity.stop_loss_price:
+        # AND ratchets up automatically as price moves favourably. Only once the
+        # entry has actually filled (see fill-wait above).
+        if result.success and filled and opportunity.stop_loss_price:
             stop_action = (
                 OrderAction.SELL if action == OrderAction.BUY else OrderAction.BUY
             )
