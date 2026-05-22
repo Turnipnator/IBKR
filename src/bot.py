@@ -796,10 +796,10 @@ class TradingBot:
         Today's realized + unrealized P&L (base currency).
 
         Realized: closed paper_trades dated today (paper mode) or IBKR
-        RealizedPnL (live).
+        RealizedPnL (live, BASE-currency row).
         Unrealized: dry_run uses the latest cached signal price as the mark;
         falls back to best_price then entry. Live mode reads IBKR
-        UnrealizedPnL.
+        UnrealizedPnL (BASE-currency row, i.e. converted to account base).
         """
         realized = self.db.get_daily_pnl()
         unrealized = 0.0
@@ -825,18 +825,41 @@ class TradingBot:
             try:
                 accounts = self.connection.ib.managedAccounts() or []
                 if accounts:
+                    # IBKR reports RealizedPnL/UnrealizedPnL once per holding
+                    # currency PLUS a consolidated "BASE" row already converted to
+                    # the account base currency (GBP here). Use BASE so the figure
+                    # — and the max_daily_loss comparison — is in the right
+                    # currency. Previously this skipped BASE and grabbed the first
+                    # non-BASE row (USD), printing the raw USD number with a £ sign.
+                    # Fall back to the first non-BASE row only if BASE is absent,
+                    # so we never silently read 0 (which would fail unsafe).
+                    base_real = base_unreal = None
+                    fb_real = fb_unreal = None
                     for v in self.connection.ib.accountValues(accounts[0]):
-                        if v.tag == "UnrealizedPnL" and v.currency not in ("", "BASE"):
-                            try:
-                                unrealized = float(v.value)
-                                break
-                            except ValueError:
-                                pass
-                        if v.tag == "RealizedPnL" and v.currency not in ("", "BASE"):
-                            try:
-                                realized = float(v.value)
-                            except ValueError:
-                                pass
+                        if v.tag not in ("RealizedPnL", "UnrealizedPnL"):
+                            continue
+                        try:
+                            val = float(v.value)
+                        except ValueError:
+                            continue
+                        if v.currency == "BASE":
+                            if v.tag == "RealizedPnL":
+                                base_real = val
+                            else:
+                                base_unreal = val
+                        elif v.currency != "":
+                            if v.tag == "RealizedPnL" and fb_real is None:
+                                fb_real = val
+                            elif v.tag == "UnrealizedPnL" and fb_unreal is None:
+                                fb_unreal = val
+                    if base_real is not None:
+                        realized = base_real
+                    elif fb_real is not None:
+                        realized = fb_real
+                    if base_unreal is not None:
+                        unrealized = base_unreal
+                    elif fb_unreal is not None:
+                        unrealized = fb_unreal
             except Exception as e:
                 logger.debug(f"Could not fetch IBKR PnL values: {e}")
 
