@@ -121,7 +121,7 @@ class TradingConfig:
     min_hold_days: int = 5         # Minimum hold period to prevent whipsaws
     drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
     drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
-    max_daily_loss: float = 101.0      # Daily loss limit (3% of ~$3,377 live capital)
+    max_daily_loss: float = 200.0      # Daily loss limit, base GBP (~4% of £5k NLV). HARDCODED — the only risk limit that does NOT auto-scale off NLV; re-bump if capital changes.
 
     # Shorting
     enable_shorting: bool = False   # Start long-only, add shorts later
