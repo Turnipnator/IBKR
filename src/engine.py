@@ -238,15 +238,12 @@ class DecisionEngine:
         threshold = self.config.signal_threshold
         targets = {}
 
-        # Filter to instruments with signals above threshold.
-        # When shorting is disabled, drop short signals HERE — before the
-        # top-N cap below — so a strong short can't occupy a position slot it
-        # will only be discarded from later (the per-symbol loop also skips
-        # disabled shorts at line ~287, but by then the slot is already spent).
-        # Otherwise the book under-deploys: e.g. on 2026-05-25 two shorts
-        # (IDTM -1.00, NGAS -0.96) ranked into the top-8 by |signal|, were
-        # dropped as shorts, and left only 6 longs while CNYA/IJPN (#9/#10)
-        # never got considered.
+        # Filter to tradeable instruments with signals above threshold.
+        # When shorting is disabled, drop short signals HERE so they never
+        # compete for position slots — a strong short would otherwise rank high
+        # by |signal| only to be discarded in the sizing loop, under-deploying
+        # the book (e.g. 2026-05-25: shorts IDTM -1.00 / NGAS -0.96 displaced
+        # the longs CNYA/IJPN).
         active_signals = {
             sym: data for sym, data in signals.items()
             if abs(data["combined"]) >= threshold
@@ -257,16 +254,17 @@ class DecisionEngine:
             logger.info("No signals above threshold — all flat")
             return targets
 
-        # Rank by signal strength and cap to max_open_positions
+        # Rank by signal strength. We deliberately do NOT pre-slice to
+        # max_open_positions: a high-ranked name can be unaffordable (e.g. a
+        # ~£1.8k/share ETF that breaches the per-position cap → 0 shares at ~£5k
+        # NLV). Pre-slicing would let it consume a slot and shrink the book.
+        # Instead the sizing loop walks this full ranked list and fills up to
+        # max_open_positions with names that clear ≥1 share, skipping the rest.
         total_active = len(active_signals)
         sorted_signals = sorted(
             active_signals.items(),
             key=lambda x: abs(x[1]["combined"]),
             reverse=True,
-        )
-        active_signals = dict(sorted_signals[:self.config.max_open_positions])
-        logger.info(
-            f"Active signals: {total_active}, trading top {len(active_signals)}"
         )
 
         # FX rates: BASE per 1 CCY. Fetched once per rebalance.
@@ -277,12 +275,22 @@ class DecisionEngine:
                 + ", ".join(f"{k}={v:.4f}" for k, v in sorted(fx_rates.items()))
             )
 
-        # Count active positions for risk budget distribution
-        num_active = len(active_signals)
+        # Intended position count sets the per-position risk budget — capped at
+        # the number of tradeable signals available. Sizing uses this fixed N so
+        # each position carries consistent risk regardless of how many of the
+        # top-ranked names end up affordable.
+        num_active = min(self.config.max_open_positions, total_active)
+        logger.info(
+            f"Active signals: {total_active}, filling up to {num_active} positions"
+        )
         # risk_per_position kept in BASE; converted per-symbol below
         risk_per_position_base = (capital * self.config.risk_budget) / num_active
 
-        for symbol, data in active_signals.items():
+        for symbol, data in sorted_signals:
+            # Stop once the book is full of affordable names; everything below
+            # this rank is surplus to max_open_positions.
+            if len(targets) >= self.config.max_open_positions:
+                break
             combined = data["combined"]
             price = data["price"]            # in symbol's local currency
             atr_val = data["atr"]            # in symbol's local currency
@@ -324,6 +332,11 @@ class DecisionEngine:
             if target_shares * price > max_value_local:
                 target_shares = int(max_value_local / price)  # never exceed 15% cap
             if target_shares <= 0:
+                logger.info(
+                    f"  {symbol}: 0 shares within "
+                    f"{self.config.max_position_pct:.0%} cap @ {price:.2f} {ccy} "
+                    f"— unaffordable, slot backfilled from next-ranked signal"
+                )
                 continue
 
             # Apply direction
