@@ -238,10 +238,19 @@ class DecisionEngine:
         threshold = self.config.signal_threshold
         targets = {}
 
-        # Filter to instruments with signals above threshold
+        # Filter to instruments with signals above threshold.
+        # When shorting is disabled, drop short signals HERE — before the
+        # top-N cap below — so a strong short can't occupy a position slot it
+        # will only be discarded from later (the per-symbol loop also skips
+        # disabled shorts at line ~287, but by then the slot is already spent).
+        # Otherwise the book under-deploys: e.g. on 2026-05-25 two shorts
+        # (IDTM -1.00, NGAS -0.96) ranked into the top-8 by |signal|, were
+        # dropped as shorts, and left only 6 longs while CNYA/IJPN (#9/#10)
+        # never got considered.
         active_signals = {
             sym: data for sym, data in signals.items()
             if abs(data["combined"]) >= threshold
+            and (self.config.enable_shorting or data["combined"] > 0)
         }
 
         if not active_signals:
