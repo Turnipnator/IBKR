@@ -943,6 +943,52 @@ class TradingBot:
 
         self._last_risk_check = datetime.now()
 
+    def _check_watchdog(self):
+        """Self-restart if the data probe has been failing continuously for too long.
+
+        Background: ``data_health_checker`` calls ``gateway_monitor.restart_gateway()``
+        after 2 consecutive probe failures, but the monitor caps at 3 restarts/day
+        (in-memory). Once the cap trips, every subsequent probe failure is silent
+        past the initial Telegram alert and the loop runs forever in a broken
+        state (the 2026-05-23→25 weekend pattern).
+
+        Trigger: ``consecutive_failures`` >= ``watchdog_timeout_min /
+        probe_interval_min`` (floor of 3, to avoid one-shot transient kills).
+        Crashing via ``sys.exit(1)`` lets Docker's ``restart: unless-stopped``
+        policy recreate the container, which resets ``gateway_monitor``'s
+        in-memory restart counter so auto-heal can try again. Tied to failure
+        COUNT (not wall-clock since last success) so off-hours gaps don't
+        false-fire on first probe of the new session.
+        """
+        failures = self.data_health.consecutive_failures
+        if failures == 0:
+            return
+
+        timeout_min = trading_config.watchdog_timeout_min
+        probe_interval_min = max(1, self.data_health.probe_interval_sec // 60)
+        threshold_failures = max(3, timeout_min // probe_interval_min)
+        if failures < threshold_failures:
+            return
+
+        last_success = self.data_health.time_since_last_success()
+        last_success_str = (
+            f"{last_success.total_seconds()/60:.0f} min ago"
+            if last_success else "never since startup"
+        )
+        msg = (
+            f"Watchdog: data probe failed {failures}x consecutively "
+            f"(last success: {last_success_str}, threshold {timeout_min} min). "
+            f"Auto-heal isn't working — self-restarting via sys.exit(1) so "
+            f"Docker recreates the container."
+        )
+        logger.critical(msg)
+        if self.notifier and self.notifier.enabled:
+            try:
+                self.notifier.notify_error(msg, "Watchdog")
+            except Exception as e:
+                logger.error(f"Watchdog: failed to send Telegram alert: {e}")
+        sys.exit(1)
+
     def run_scheduled(self):
         """Run the bot on a schedule until stopped."""
         self.running = True
@@ -999,6 +1045,9 @@ class TradingBot:
                 # gateway if CSPX data requests time out)
                 if self.data_health.should_probe():
                     self.data_health.check_and_heal()
+
+                # Watchdog: if self-heal isn't working, sys.exit so Docker recreates us
+                self._check_watchdog()
 
                 # Daily rebalance window
                 if self._is_rebalance_time():

@@ -142,6 +142,12 @@ class TradingConfig:
     # cross-referencing portfolio snapshots vs. the universe in effect at the time.
     instrument_universe_version: str = "v2_ucits"
 
+    # Watchdog: if the data probe has been continuously failing for this many
+    # minutes (i.e. self-heal via gateway restart isn't working — typical cause
+    # is the 3-restart daily cap hitting and then sitting silent), the bot
+    # sys.exit(1)s so Docker's restart policy recreates the container.
+    watchdog_timeout_min: int = 30
+
 
 @dataclass
 class DataConfig:

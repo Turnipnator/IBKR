@@ -16,7 +16,7 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from .contracts import resolve_contract
@@ -52,10 +52,17 @@ class DataHealthChecker:
         self.probe_interval_sec = probe_interval_sec
         self._consecutive_failures = 0
         self._last_probe_time: Optional[datetime] = None
+        self._last_success_time: Optional[datetime] = None
 
     @property
     def consecutive_failures(self) -> int:
         return self._consecutive_failures
+
+    def time_since_last_success(self) -> Optional[timedelta]:
+        """Time since the last successful probe, or None if no probe has succeeded yet."""
+        if self._last_success_time is None:
+            return None
+        return datetime.now() - self._last_success_time
 
     def should_probe(self) -> bool:
         """True if enough time has passed since the last probe."""
@@ -101,6 +108,7 @@ class DataHealthChecker:
                 else:
                     logger.info(f"Data probe OK ({PROBE_SYMBOL} close ${last_close})")
                 self._consecutive_failures = 0
+                self._last_success_time = datetime.now()
                 return True
 
             logger.warning(f"Data probe for {PROBE_SYMBOL} returned no bars")
