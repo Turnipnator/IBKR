@@ -943,6 +943,90 @@ class TradingBot:
 
         self._last_risk_check = datetime.now()
 
+    def _on_commission_report(self, trade, fill, report):
+        """Fired by ib_insync whenever IBKR sends a CommissionReport.
+
+        Listening here (not at execDetailsEvent) because the report carries
+        IBKR's realizedPNL and commission, both already in the account base
+        currency. Filter to SELL fills of protective stops (TRAIL/STP) — the
+        silent-fill case from the 2026-06-08 healthcheck. Other fills (entry
+        BUYs, drawdown-halt MKT exits) have their own log paths.
+        """
+        try:
+            order_type = getattr(trade.order, "orderType", "") or ""
+            action = getattr(trade.order, "action", "") or ""
+            if order_type not in ("TRAIL", "STP", "STP LMT"):
+                return
+            if action not in ("SELL", "BUY"):
+                return
+
+            symbol = trade.contract.symbol
+            exec_obj = fill.execution
+            exit_price = float(
+                getattr(exec_obj, "avgPrice", None)
+                or getattr(exec_obj, "price", 0.0)
+            )
+            quantity = int(
+                getattr(exec_obj, "shares", None)
+                or getattr(exec_obj, "cumQty", 0)
+            )
+            pnl = float(getattr(report, "realizedPNL", 0.0) or 0.0)
+            commission = float(getattr(report, "commission", 0.0) or 0.0)
+
+            logger.info(
+                f"Protective stop FILLED: {action} {quantity} {symbol} "
+                f"@ ${exit_price:.2f} (realizedPnL={pnl:+.2f}, "
+                f"commission={commission:.2f}, orderId={trade.order.orderId})"
+            )
+
+            try:
+                self.db.save_trade(
+                    symbol=symbol,
+                    action=action,
+                    quantity=quantity,
+                    price=exit_price,
+                    order_id=trade.order.orderId,
+                    status="FILLED",
+                    reason=f"{order_type} stop fill (realizedPnL={pnl:+.2f})",
+                )
+            except Exception as e:
+                logger.warning(f"Could not log fill to trades table: {e}")
+
+            if self.notifier and self.notifier.enabled:
+                self.notifier.notify_position_closed(
+                    symbol=symbol,
+                    action=action,
+                    quantity=quantity,
+                    exit_price=exit_price,
+                    pnl_amount=pnl,
+                    commission=commission,
+                    exit_reason="TRAILING_STOP" if order_type == "TRAIL" else "STOP_LOSS",
+                    currency=currency_symbol(self._get_base_currency()),
+                )
+        except Exception as e:
+            logger.error(f"Error handling commission report: {e}")
+
+    def _register_fill_handlers(self):
+        """Subscribe to ib_insync commissionReportEvent (LIVE only).
+
+        The IB instance persists across reconnects (ConnectionManager doesn't
+        recreate it), so one subscription at startup catches all subsequent
+        fills — including server-side GTC trail-stops that fire while the bot
+        is disconnected and report when it reconnects.
+        """
+        if self.dry_run:
+            return
+        try:
+            ib = self.connection.ib
+            try:
+                ib.commissionReportEvent -= self._on_commission_report
+            except (ValueError, Exception):
+                pass
+            ib.commissionReportEvent += self._on_commission_report
+            logger.info("Subscribed to commissionReportEvent for LIVE fill alerts")
+        except Exception as e:
+            logger.error(f"Failed to subscribe to commissionReportEvent: {e}")
+
     def _check_watchdog(self):
         """Self-restart if the data probe has been failing continuously for too long.
 
@@ -1014,6 +1098,13 @@ class TradingBot:
             self._reconcile_protective_stops()
         except Exception as e:
             logger.error(f"Startup reconciliation failed: {e}")
+
+        # Subscribe to commission-report events so server-side trail-stop
+        # fills emit Telegram alerts (closes the 2026-06-08 silent-fill gap).
+        try:
+            self._register_fill_handlers()
+        except Exception as e:
+            logger.error(f"Fill-handler registration failed: {e}")
 
         try:
             while self.running:

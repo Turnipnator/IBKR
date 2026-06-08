@@ -379,6 +379,55 @@ Bot is now monitoring the market.
 """
         return self.send_sync(message.strip())
 
+    def notify_position_closed(
+        self,
+        symbol: str,
+        action: str,
+        quantity: int,
+        exit_price: float,
+        pnl_amount: float,
+        commission: float,
+        exit_reason: str = "TRAILING_STOP",
+        currency: str = "$",
+    ) -> bool:
+        """Send notification when a LIVE server-side protective stop fills.
+
+        Mirrors notify_paper_trade_closed but for real fills caught via
+        ib_insync's commissionReportEvent. ``pnl_amount`` is IBKR's
+        ``realizedPNL`` (account base currency, commission-inclusive).
+        """
+        if pnl_amount > 0:
+            emoji = "\U0001F4B0"
+            result = "PROFIT"
+        elif pnl_amount < 0:
+            emoji = "\U0001F4C9"
+            result = "LOSS"
+        else:
+            emoji = "\U0001F7F0"
+            result = "BREAK EVEN"
+
+        reason_text = {
+            "TRAILING_STOP": "Trailing Stop Hit",
+            "STOP_LOSS": "Stop Loss Hit",
+        }.get(exit_reason, exit_reason)
+
+        pnl_sign = "+" if pnl_amount >= 0 else ""
+
+        message = f"""
+{emoji} <b>Position Closed</b> — {result}
+
+<b>Symbol:</b> {symbol}
+<b>Action:</b> {action}
+<b>Size:</b> {quantity:,} shares
+<b>Exit:</b> ${exit_price:,.2f}
+<b>Reason:</b> {reason_text}
+
+<b>Realized P&L:</b> {pnl_sign}{currency}{pnl_amount:,.2f} (incl. {currency}{commission:.2f} comm)
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
     def notify_paper_trade_stats(
         self,
         total_trades: int,
