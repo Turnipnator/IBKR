@@ -513,6 +513,23 @@ class TradingBot:
                 else:
                     logger.info(f"  → Failed: {result.message}")
 
+            # Catch entry-race deferrals: BUYs that filled after the engine's 5s
+            # wait window have no protective stop yet. Without this, the next
+            # reconcile sometimes didn't run for hours (intraday risk-checks fire
+            # on boot/rebalance/reconnect, not a fixed interval — see 2026-06-09
+            # incident where AIGI/COPA sat naked ~18h). Two passes cover the
+            # tail of slow fills cheaply.
+            if results["trades_executed"] > 0:
+                for delay_s in (30, 90):
+                    try:
+                        self.connection.ib.sleep(delay_s)
+                        self._reconcile_protective_stops()
+                    except Exception as e:
+                        logger.warning(
+                            f"Post-rebalance reconcile sweep failed: {e}"
+                        )
+                        break
+
         # Send analysis notification
         if self.notifier and self.notifier.enabled:
             self.notifier.notify_analysis_complete(
@@ -632,9 +649,10 @@ class TradingBot:
 
         if placed > 0 and self.notifier and self.notifier.enabled:
             self.notifier.notify_error(
-                f"Reconciliation placed {placed} missing protective stop(s) on "
-                f"startup. Usually means the bot crashed mid-rebalance previously.",
-                "Startup reconciliation",
+                f"Reconciliation placed {placed} missing protective stop(s). "
+                f"Likely a previous rebalance BUY that filled after the 5s wait "
+                f"window (entry-race deferral), or the bot crashed mid-rebalance.",
+                "Protective-stop reconciliation",
             )
 
         return placed
