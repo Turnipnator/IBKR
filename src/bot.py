@@ -965,10 +965,13 @@ class TradingBot:
         """Fired by ib_insync whenever IBKR sends a CommissionReport.
 
         Listening here (not at execDetailsEvent) because the report carries
-        IBKR's realizedPNL and commission, both already in the account base
-        currency. Filter to SELL fills of protective stops (TRAIL/STP) — the
-        silent-fill case from the 2026-06-08 healthcheck. Other fills (entry
-        BUYs, drawdown-halt MKT exits) have their own log paths.
+        IBKR's realizedPNL and commission in the underlying's trading
+        currency (USD for USD-quoted UCITS, GBP for GBP-quoted) — display
+        in that currency rather than re-FX'ing per fill, so the audit trail
+        matches the IBKR statement. Filter to SELL fills of protective stops
+        (TRAIL/STP) — the silent-fill case from the 2026-06-08 healthcheck.
+        Other fills (entry BUYs, drawdown-halt MKT exits) have their own
+        log paths.
         """
         try:
             order_type = getattr(trade.order, "orderType", "") or ""
@@ -990,11 +993,17 @@ class TradingBot:
             )
             pnl = float(getattr(report, "realizedPNL", 0.0) or 0.0)
             commission = float(getattr(report, "commission", 0.0) or 0.0)
+            ccy_code = (
+                getattr(report, "currency", None)
+                or getattr(trade.contract, "currency", None)
+            )
+            sym = currency_symbol(ccy_code)
 
             logger.info(
                 f"Protective stop FILLED: {action} {quantity} {symbol} "
-                f"@ ${exit_price:.2f} (realizedPnL={pnl:+.2f}, "
-                f"commission={commission:.2f}, orderId={trade.order.orderId})"
+                f"@ {sym}{exit_price:.2f} (realizedPnL={sym}{pnl:+.2f}, "
+                f"commission={sym}{commission:.2f}, "
+                f"orderId={trade.order.orderId})"
             )
 
             try:
@@ -1005,7 +1014,7 @@ class TradingBot:
                     price=exit_price,
                     order_id=trade.order.orderId,
                     status="FILLED",
-                    reason=f"{order_type} stop fill (realizedPnL={pnl:+.2f})",
+                    reason=f"{order_type} stop fill (realizedPnL={sym}{pnl:+.2f})",
                 )
             except Exception as e:
                 logger.warning(f"Could not log fill to trades table: {e}")
@@ -1019,7 +1028,7 @@ class TradingBot:
                     pnl_amount=pnl,
                     commission=commission,
                     exit_reason="TRAILING_STOP" if order_type == "TRAIL" else "STOP_LOSS",
-                    currency=currency_symbol(self._get_base_currency()),
+                    currency=sym,
                 )
         except Exception as e:
             logger.error(f"Error handling commission report: {e}")

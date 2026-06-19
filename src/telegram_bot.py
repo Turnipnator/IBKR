@@ -394,7 +394,8 @@ Bot is now monitoring the market.
 
         Mirrors notify_paper_trade_closed but for real fills caught via
         ib_insync's commissionReportEvent. ``pnl_amount`` is IBKR's
-        ``realizedPNL`` (account base currency, commission-inclusive).
+        ``realizedPNL`` in the underlying's trading currency (matched by
+        the ``currency`` display symbol passed in).
         """
         if pnl_amount > 0:
             emoji = "\U0001F4B0"
@@ -419,7 +420,7 @@ Bot is now monitoring the market.
 <b>Symbol:</b> {symbol}
 <b>Action:</b> {action}
 <b>Size:</b> {quantity:,} shares
-<b>Exit:</b> ${exit_price:,.2f}
+<b>Exit:</b> {currency}{exit_price:,.2f}
 <b>Reason:</b> {reason_text}
 
 <b>Realized P&L:</b> {pnl_sign}{currency}{pnl_amount:,.2f} (incl. {currency}{commission:.2f} comm)
