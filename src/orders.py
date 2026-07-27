@@ -683,10 +683,18 @@ class PositionManager:
         accrued = _num('AccruedCash')
         equity_with_loan = _num('EquityWithLoanValue')
 
+        # Order matters. On a CASH account IBKR reports EquityWithLoanValue as
+        # *settled cash* (EWL == SettledCash == BuyingPower == AvailableFunds),
+        # which excludes both the market value of open positions AND unsettled
+        # sale proceeds (T+2). Preferring it sized the entire book off ~54% of
+        # the account — 2026-07-27 live: EWL £2,533.91 vs NLV £4,673.30
+        # (= cash £3,055.04 + positions £1,618.25). That is the main reason only
+        # ~34% of capital was ever deployed. Cash + positions IS the "true
+        # deployable equity" this docstring describes, and equals NLV − accrued.
         sizing_capital = (
-            equity_with_loan if equity_with_loan > 0
-            else total_cash + gross_positions if (total_cash + gross_positions) > 0
-            else max(net_liq - accrued, 0.0)
+            total_cash + gross_positions if (total_cash + gross_positions) > 0
+            else max(net_liq - accrued, 0.0) if net_liq > 0
+            else equity_with_loan
         )
 
         return {

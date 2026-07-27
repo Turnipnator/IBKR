@@ -523,7 +523,16 @@ class TradingBot:
                 for delay_s in (30, 90):
                     try:
                         self.connection.ib.sleep(delay_s)
-                        self._reconcile_protective_stops()
+                        # Log unconditionally: _reconcile_protective_stops() is
+                        # silent when it finds nothing to heal, so without this
+                        # there is no way to tell "swept, all clean" from
+                        # "never ran" (2026-07-27 healthcheck spent a while
+                        # timing the 120s gap to prove it was firing).
+                        healed = self._reconcile_protective_stops()
+                        logger.info(
+                            f"Post-rebalance stop sweep (+{delay_s}s): "
+                            f"{healed} stop(s) placed"
+                        )
                     except Exception as e:
                         logger.warning(
                             f"Post-rebalance reconcile sweep failed: {e}"
@@ -1018,6 +1027,21 @@ class TradingBot:
                 )
             except Exception as e:
                 logger.warning(f"Could not log fill to trades table: {e}")
+
+            # Block re-entry for a while — this stop-out means the trend failed.
+            # Re-buying within days is what turned CNYA into 3 losing round-trips.
+            try:
+                cooldown_days = trading_config.reentry_cooldown_days
+                if cooldown_days > 0:
+                    self.db.set_symbol_cooldown(
+                        symbol, cooldown_days, reason=f"{order_type} stop fill"
+                    )
+                    logger.info(
+                        f"{symbol}: re-entry blocked for {cooldown_days} days "
+                        f"after stop-out"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not set re-entry cooldown for {symbol}: {e}")
 
             if self.notifier and self.notifier.enabled:
                 self.notifier.notify_position_closed(

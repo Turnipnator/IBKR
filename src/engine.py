@@ -244,10 +244,35 @@ class DecisionEngine:
         # by |signal| only to be discarded in the sizing loop, under-deploying
         # the book (e.g. 2026-05-25: shorts IDTM -1.00 / NGAS -0.96 displaced
         # the longs CNYA/IJPN).
+        # Re-entry cooldown: a symbol whose protective stop fired recently is
+        # dropped HERE (same reasoning as the shorts filter above) so the slot
+        # backfills to the next-ranked name instead of being wasted downstream.
+        # Symbols we still HOLD are never filtered — that would zero their target
+        # and force a sale, which is the opposite of the intent.
+        try:
+            held = {
+                p.symbol for p in self.position_manager.get_positions()
+                if p.quantity != 0
+            }
+        except Exception as e:
+            logger.warning(f"Could not fetch positions for cooldown filter: {e}")
+            held = set()
+        cooldowns = self.db.get_active_cooldowns()
+        blocked = {
+            sym: until for sym, until in cooldowns.items() if sym not in held
+        }
+        for sym, until in sorted(blocked.items()):
+            if sym in signals and abs(signals[sym]["combined"]) >= threshold:
+                logger.info(
+                    f"  {sym}: in re-entry cooldown until {until[:10]} "
+                    f"— slot backfilled from next-ranked signal"
+                )
+
         active_signals = {
             sym: data for sym, data in signals.items()
             if abs(data["combined"]) >= threshold
             and (self.config.enable_shorting or data["combined"] > 0)
+            and sym not in blocked
         }
 
         if not active_signals:

@@ -113,12 +113,22 @@ class TradingConfig:
     atr_period: int = 20           # ATR lookback for volatility
     atr_stop_multiplier: float = 3.0  # Trailing stop = 3x ATR from peak
     risk_budget: float = 0.20      # Target 20% annualised portfolio volatility
-    max_position_pct: float = 0.15 # Max 15% of equity per position (sized for £10k with top-N concentration)
+    # 18% x 5 slots = 90% max deployment, leaving ~10% headroom so a cash
+    # account with T+2 unsettled proceeds can still fund the next entry.
+    # Raised from 15% (which paired with 8 slots) as part of the 2026-07-27
+    # commission-drag fix — see max_open_positions below.
+    max_position_pct: float = 0.18 # Max 18% of equity per position
     max_asset_class_pct: float = 0.40  # Max 40% in any asset class
     max_gross_exposure: float = 1.0    # No leverage — cash account
 
     # Risk management
     min_hold_days: int = 5         # Minimum hold period to prevent whipsaws
+    # Block re-entry into a symbol for N calendar days after its protective stop
+    # fires. Without this the bot re-bought failing names within days: CNYA cost
+    # -$59.25 over 3 round-trips and EIMU -$34.74 over 2 (plus ~$40 commission)
+    # between 2026-06-26 and 2026-07-17. Only blocks NEW entries — positions
+    # already held are untouched, and the freed slot backfills to the next signal.
+    reentry_cooldown_days: int = 10
     drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
     drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
     max_daily_loss: float = 200.0      # Daily loss limit, base GBP (~4% of £5k NLV). HARDCODED — the only risk limit that does NOT auto-scale off NLV; re-bump if capital changes.
@@ -136,7 +146,15 @@ class TradingConfig:
     risk_check_interval_hours: int = 4  # Check trailing stops every 4 hours
 
     # Max open positions — top-N by signal strength (enforced in engine._calculate_target_positions)
-    max_open_positions: int = 8
+    #
+    # Cut 8 -> 5 on 2026-07-27 to fix commission drag. IBKR's minimum commission
+    # is $4/order, so a round-trip costs ~$8 (~£6) regardless of size. At 8 slots
+    # the per-position cap was ~£380, giving only ~£6-31 of risk-to-stop per
+    # trade — commission averaged ~43% of the risk unit and hit 93% on RTWO.
+    # No trend-following edge survives that. Fewer, larger positions spread the
+    # fixed cost over more capital: measured 43% -> 15% on the 2026-07-27 book.
+    # 5 also matches reality: only 6-7 names clear signal_threshold at any time.
+    max_open_positions: int = 5
 
     # Universe version — bump when the instrument set changes; useful for
     # cross-referencing portfolio snapshots vs. the universe in effect at the time.

@@ -130,6 +130,14 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_instrument_signals_date
                 ON instrument_signals(signal_date, symbol);
+
+                CREATE TABLE IF NOT EXISTS symbol_cooldowns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE,
+                    cooldown_until TEXT NOT NULL,
+                    reason TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             conn.commit()
 
@@ -554,15 +562,69 @@ class Database:
         finally:
             conn.close()
 
-    # ==================== Legacy compatibility ====================
+    # ==================== Re-entry cooldowns ====================
 
-    def set_symbol_cooldown(self, symbol: str, minutes: int, reason: str = "stop_loss"):
-        """Legacy: cooldowns not used in trend-following but kept for compatibility."""
-        pass
+    def set_symbol_cooldown(self, symbol: str, days: int, reason: str = "stop_loss"):
+        """Block re-entry into ``symbol`` for ``days`` calendar days.
+
+        Called when a protective stop fills. Upserts so a later stop-out always
+        extends the window rather than being ignored.
+        """
+        if days <= 0:
+            return
+        until = (datetime.now() + timedelta(days=days)).isoformat()
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO symbol_cooldowns (symbol, cooldown_until, reason)
+                VALUES (?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    cooldown_until = excluded.cooldown_until,
+                    reason = excluded.reason
+                """,
+                (symbol, until, reason),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def is_symbol_in_cooldown(self, symbol: str) -> tuple[bool, Optional[str]]:
-        """Legacy: always returns not in cooldown."""
-        return (False, None)
+        """Return (in_cooldown, cooldown_until_iso) for ``symbol``."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT cooldown_until FROM symbol_cooldowns WHERE symbol = ?",
+                (symbol,),
+            )
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return (False, None)
+            try:
+                until = datetime.fromisoformat(row[0])
+            except (TypeError, ValueError):
+                return (False, None)
+            if datetime.now() < until:
+                return (True, row[0])
+            return (False, None)
+        finally:
+            conn.close()
+
+    def get_active_cooldowns(self) -> dict:
+        """Symbol -> cooldown_until ISO string, for symbols still cooling down."""
+        now = datetime.now().isoformat()
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT symbol, cooldown_until FROM symbol_cooldowns "
+                "WHERE cooldown_until > ?",
+                (now,),
+            )
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    # ==================== Legacy compatibility ====================
 
     def increment_daily_trade_count(self, symbol: str) -> int:
         """Legacy: not used in daily rebalancing."""
