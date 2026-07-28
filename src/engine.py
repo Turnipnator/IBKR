@@ -800,12 +800,19 @@ class DecisionEngine:
                 break
 
         if not filled:
+            # filled_quantity stays 0 so the caller can tell "order accepted"
+            # from "shares actually acquired" — result.success only means IBKR
+            # took the order. Conflating the two logged "Topped up COPA to 14"
+            # on 2026-07-28 while 10 of those shares were still unfilled.
+            result.filled_quantity = 0
             logger.warning(
                 f"{opportunity.symbol}: top-up BUY not filled within wait window "
                 f"(status={result.trade.orderStatus.status}); existing stop left "
                 f"in place, reconcile will extend cover once the fill lands"
             )
             return result
+
+        result.filled_quantity = delta
 
         trail_amount = self.config.atr_stop_multiplier * opportunity.atr_value
         if trail_amount <= 0:

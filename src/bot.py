@@ -517,10 +517,20 @@ class TradingBot:
                         )
                         result = self.engine.top_up_position(opp, held)
                         if result.success:
+                            # Count it either way: an accepted-but-unfilled BUY
+                            # is exactly the case the post-rebalance sweep has
+                            # to run for, and the sweep is gated on this count.
                             results["trades_executed"] += 1
-                            logger.info(
-                                f"  → Topped up {opp.symbol} to {target}"
-                            )
+                            if result.filled_quantity:
+                                logger.info(
+                                    f"  → Topped up {opp.symbol} to {target}"
+                                )
+                            else:
+                                logger.info(
+                                    f"  → Top-up BUY placed for {opp.symbol} "
+                                    f"(+{target - held}) but not yet filled — "
+                                    f"cover extends on reconcile"
+                                )
                         else:
                             logger.info(f"  → Top-up failed: {result.message}")
                     else:
