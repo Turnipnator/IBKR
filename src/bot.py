@@ -481,10 +481,14 @@ class TradingBot:
                     "Daily-loss halt active — skipping all live entries this cycle"
                 )
                 opportunities = []
-            current_positions = {
-                p.symbol for p in self.engine.position_manager.get_positions()
+            # Quantities, not just symbols — a held symbol may still be far
+            # below target and need topping up in the execution loop below.
+            held_qty = {
+                p.symbol: p.quantity
+                for p in self.engine.position_manager.get_positions()
                 if p.quantity != 0
             }
+            current_positions = set(held_qty)
             # Pending entry orders not yet filled (e.g. submitted just before a
             # crash). Same-symbol guard prevents duplicate entries on restart.
             try:
@@ -499,7 +503,31 @@ class TradingBot:
 
             for opp in opportunities:
                 if opp.symbol in current_positions:
-                    logger.info(f"  → Skipped: already holding {opp.symbol}")
+                    held = held_qty.get(opp.symbol, 0)
+                    target = opp.position_size
+                    threshold = trading_config.topup_drift_threshold
+                    # Top up only when materially short of target, and only
+                    # upwards — trimming an oversized position is the trailing
+                    # stop's job, and selling here would fight it.
+                    if held > 0 and target > 0 and held < target * (1 - threshold):
+                        logger.info(
+                            f"  → Top-up: {opp.symbol} held {held} vs target "
+                            f"{target} ({held / target:.0%}) — buying "
+                            f"{target - held}"
+                        )
+                        result = self.engine.top_up_position(opp, held)
+                        if result.success:
+                            results["trades_executed"] += 1
+                            logger.info(
+                                f"  → Topped up {opp.symbol} to {target}"
+                            )
+                        else:
+                            logger.info(f"  → Top-up failed: {result.message}")
+                    else:
+                        logger.info(
+                            f"  → Skipped: already holding {opp.symbol} "
+                            f"({held}/{target})"
+                        )
                     continue
                 if opp.symbol in pending_entries:
                     logger.info(
@@ -574,14 +602,6 @@ class TradingBot:
         if not positions:
             return 0
 
-        # Map: symbol -> set of protective stop actions already on file
-        # (long needs a SELL stop, short needs a BUY stop)
-        open_orders = self.engine.order_manager.get_open_orders()
-        protected: dict[str, set[str]] = {}
-        for t in open_orders:
-            if t.order.orderType in ("TRAIL", "STP"):
-                protected.setdefault(t.contract.symbol, set()).add(t.order.action)
-
         from .orders import OrderAction
         from .indicators import TrendFollowingAnalyzer
 
@@ -590,13 +610,29 @@ class TradingBot:
             if pos.quantity == 0:
                 continue
             needed_action = "SELL" if pos.quantity > 0 else "BUY"
-            if needed_action in protected.get(pos.symbol, set()):
+            needed_qty = abs(pos.quantity)
+
+            # Compare COVERED SHARES, not merely "is there a stop?". Presence
+            # alone was the old test, and it silently passed a position whose
+            # stop covered fewer shares than were held — exactly what a top-up
+            # creates if its stop swap fails. Anything short of full cover is
+            # treated as naked and rebuilt.
+            covered = self.engine.order_manager.covered_quantity(
+                pos.symbol, needed_action
+            )
+            if covered >= needed_qty:
                 continue
 
-            logger.warning(
-                f"Reconcile: {pos.symbol} ({pos.quantity:+d} shares) has no "
-                f"protective stop — placing one now"
-            )
+            if covered > 0:
+                logger.warning(
+                    f"Reconcile: {pos.symbol} ({pos.quantity:+d} shares) only has "
+                    f"{covered} share(s) protected — replacing with full cover"
+                )
+            else:
+                logger.warning(
+                    f"Reconcile: {pos.symbol} ({pos.quantity:+d} shares) has no "
+                    f"protective stop — placing one now"
+                )
 
             # Fresh ATR + price from daily bars (matches engine sizing)
             try:
@@ -636,13 +672,17 @@ class TradingBot:
                 initial_stop = round(current_price + trail_amount, 2)
                 action = OrderAction.BUY
 
-            result = self.engine.order_manager.place_trailing_stop_order(
+            # replace_ rather than place_: when cover is PARTIAL the existing
+            # short-quantity stop must come off first, or the book would carry
+            # more SELL quantity than shares held (Error 201). With zero cover
+            # there is nothing to cancel and this degrades to a plain place.
+            result = self.engine.order_manager.replace_trailing_stop(
                 symbol=pos.symbol,
                 action=action,
                 quantity=abs(pos.quantity),
                 trail_amount=trail_amount,
                 initial_stop_price=initial_stop,
-                reason="Reconciliation: position had no working protective stop",
+                reason="Reconciliation: position was not fully protected",
             )
             if result.success:
                 placed += 1

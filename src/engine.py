@@ -724,6 +724,107 @@ class DecisionEngine:
 
         return result
 
+    def top_up_position(
+        self, opportunity: TradeOpportunity, held_qty: int
+    ) -> OrderResult:
+        """Buy an existing position up to target, then re-cover it with one stop.
+
+        Why this exists: ``opportunity.position_size`` is the FULL target, and
+        the rebalance loop used to skip any symbol already held. Positions
+        therefore froze at whatever size they were opened at and never grew
+        into a new target — after the 2026-07-27 sizing fix the book sat at 36%
+        deployed while the engine was asking for ~73%.
+
+        Sequencing is the whole safety story here:
+
+        1. BUY the shortfall first. The shares already held stay covered by
+           their existing stop for the entire buy — there is no window where
+           the original position is unprotected.
+        2. Only once the buy has FILLED, swap the stop. Placing the new
+           full-size stop before cancelling the old one would put more SELL
+           quantity on the book than we hold, which a cash account rejects as
+           an attempted short (Error 201).
+
+        If the buy does not fill in the wait window, the stop is deliberately
+        left alone: the original shares keep their cover and the quantity-aware
+        reconcile picks up the unprotected remainder within 30s.
+        """
+        target = opportunity.position_size
+        delta = target - held_qty
+
+        if delta <= 0:
+            return OrderResult(
+                success=False, message=f"no top-up needed ({held_qty}/{target})"
+            )
+
+        if self.dry_run:
+            logger.info(
+                f"[DRY RUN] Would top up {opportunity.symbol}: "
+                f"+{delta} shares ({held_qty} -> {target})"
+            )
+            return OrderResult(
+                success=True, message=f"[DRY RUN] top-up {opportunity.symbol}"
+            )
+
+        result = self.order_manager.place_market_order(
+            symbol=opportunity.symbol,
+            action=OrderAction.BUY,
+            quantity=delta,
+            reason=(
+                f"Top-up to target: {held_qty} -> {target} "
+                f"(signal {opportunity.signal_score:+.2f})"
+            ),
+        )
+        if not result.success or result.trade is None:
+            return result
+
+        filled = False
+        terminal_bad = {"Cancelled", "ApiCancelled", "Inactive"}
+        for _ in range(50):  # ~5s, same budget as a fresh entry
+            self.connection.ib.sleep(0.1)
+            status = result.trade.orderStatus.status
+            if status in terminal_bad:
+                err = "; ".join(
+                    f"{log.status}:{log.message[:120]}"
+                    for log in result.trade.log
+                    if log.message
+                ) or status
+                logger.warning(
+                    f"{opportunity.symbol}: top-up rejected post-submit — {err}"
+                )
+                result.success = False
+                result.message = f"Rejected: {err}"
+                return result
+            if status == "Filled":
+                filled = True
+                break
+
+        if not filled:
+            logger.warning(
+                f"{opportunity.symbol}: top-up BUY not filled within wait window "
+                f"(status={result.trade.orderStatus.status}); existing stop left "
+                f"in place, reconcile will extend cover once the fill lands"
+            )
+            return result
+
+        trail_amount = self.config.atr_stop_multiplier * opportunity.atr_value
+        if trail_amount <= 0:
+            logger.error(
+                f"{opportunity.symbol}: ATR=0 after top-up — cannot size a trail; "
+                f"leaving reconcile to protect the added shares"
+            )
+            return result
+
+        self.order_manager.replace_trailing_stop(
+            symbol=opportunity.symbol,
+            action=OrderAction.SELL,
+            quantity=target,
+            trail_amount=trail_amount,
+            initial_stop_price=opportunity.stop_loss_price,
+            reason=f"Top-up: re-cover full position of {target}",
+        )
+        return result
+
     def get_status_report(self) -> str:
         """Generate a status report of current state."""
         lines = [

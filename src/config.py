@@ -129,6 +129,13 @@ class TradingConfig:
     # between 2026-06-26 and 2026-07-17. Only blocks NEW entries — positions
     # already held are untouched, and the freed slot backfills to the next signal.
     reentry_cooldown_days: int = 10
+    # Top up a held position only once it has drifted this far below target.
+    # Positions never resized before 2026-07-28 — the rebalance skipped any
+    # symbol already held — so they froze at their opening size and the book
+    # sat at 36% deployed against a ~73% target. Every top-up costs a fresh
+    # ~$4 commission, so this deliberately ignores small drift: at 0.30 a
+    # position is left alone until it is under 70% of target.
+    topup_drift_threshold: float = 0.30
     drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
     drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
     max_daily_loss: float = 200.0      # Daily loss limit, base GBP (~4% of £5k NLV). HARDCODED — the only risk limit that does NOT auto-scale off NLV; re-bump if capital changes.

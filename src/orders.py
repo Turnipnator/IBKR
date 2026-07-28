@@ -437,6 +437,105 @@ class OrderManager:
             logger.error(f"Failed to place bracket order: {e}")
             return [OrderResult(success=False, message=str(e))]
 
+    def protective_stops_for(self, symbol: str, action: str) -> list:
+        """Live protective stops on `symbol` in the given direction.
+
+        Only counts orders still working at IBKR — a filled or cancelled stop
+        protects nothing, and treating it as cover is how a position ends up
+        silently naked.
+        """
+        stops = []
+        for t in self.get_open_orders():
+            if t.contract.symbol != symbol:
+                continue
+            if t.order.orderType not in ("TRAIL", "STP", "STP LMT"):
+                continue
+            if t.order.action != action:
+                continue
+            try:
+                if not t.isActive():
+                    continue
+            except Exception:
+                if t.orderStatus.status in ("Filled", "Cancelled", "ApiCancelled", "Inactive"):
+                    continue
+            stops.append(t)
+        return stops
+
+    def covered_quantity(self, symbol: str, action: str) -> int:
+        """Total share count actually protected by live stops on `symbol`."""
+        total = 0
+        for t in self.protective_stops_for(symbol, action):
+            try:
+                total += int(t.order.totalQuantity or 0) - int(t.orderStatus.filled or 0)
+            except (TypeError, ValueError):
+                continue
+        return max(total, 0)
+
+    def replace_trailing_stop(
+        self,
+        symbol: str,
+        action: OrderAction,
+        quantity: int,
+        trail_amount: float,
+        initial_stop_price: Optional[float] = None,
+        reason: Optional[str] = None,
+    ) -> OrderResult:
+        """Cancel every working stop on `symbol` and place one covering `quantity`.
+
+        Order matters and is not interchangeable. The new stop CANNOT go on
+        before the old ones come off: on a cash account the resting SELL
+        quantity would briefly exceed the shares held, and IBKR rejects the
+        excess as an attempted short (Error 201) — the same failure that left
+        four positions naked on the 2026-05-22 cutover.
+
+        The cancel is confirmed before placing, not fired and hoped for. If it
+        cannot be confirmed we abort and leave the OLD stop in place: partial
+        cover beats no cover, and the quantity-aware reconcile will retry.
+        """
+        if not self.connection.ensure_connected():
+            return OrderResult(success=False, message="Not connected to IBKR")
+
+        existing = self.protective_stops_for(symbol, action.value)
+        for t in existing:
+            self.cancel_order(t.order.orderId)
+
+        # Confirm the book is clear before adding quantity back.
+        cleared = not existing
+        for _ in range(40):  # up to ~4s
+            self.ib.sleep(0.1)
+            if not self.protective_stops_for(symbol, action.value):
+                cleared = True
+                break
+        if not cleared:
+            logger.error(
+                f"{symbol}: could not confirm cancellation of "
+                f"{len(existing)} existing stop(s) — leaving them in place "
+                f"rather than risking an oversold rejection"
+            )
+            return OrderResult(
+                success=False, message="stop cancellation not confirmed"
+            )
+
+        result = self.place_trailing_stop_order(
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            trail_amount=trail_amount,
+            initial_stop_price=initial_stop_price,
+            reason=reason,
+        )
+        if result.success:
+            logger.info(
+                f"{symbol}: protective stop replaced — now covering "
+                f"{quantity} share(s) (was {len(existing)} order(s))"
+            )
+        else:
+            logger.error(
+                f"{symbol}: NAKED — cancelled {len(existing)} stop(s) but "
+                f"replacement failed: {result.message}"
+            )
+        return result
+
     def cancel_order(self, order_id: int) -> bool:
         """Cancel an open order by ID."""
         if not self.connection.ensure_connected():
