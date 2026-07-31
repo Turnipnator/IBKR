@@ -112,6 +112,18 @@ class TradingConfig:
     # Position sizing - volatility-scaled (inverse ATR)
     atr_period: int = 20           # ATR lookback for volatility
     atr_stop_multiplier: float = 3.0  # Trailing stop = 3x ATR from peak
+    # Minimum annualised volatility to be tradeable. Cash proxies and
+    # short-duration bond ETFs (IBTA 1.3%, IDTP 2.7%, JPEA 3.9%, LQDE 5.0%,
+    # DTLA 7.6%, ...) game both signal legs: TSMOM scores +1.00 because a
+    # yield-accruing flat line is up over every lookback, and CSMOM rewards
+    # "least bad" in a down tape — so on 2026-07-29 IBTA (T-bills, +3%/yr)
+    # ranked #5 and took 18% of NLV with a 0.36%-wide stop, putting the ~£6
+    # round-trip commission at 215% of risk-to-stop. Tape check 06-19→07-31:
+    # low-vol names went 0-for-6 for -$69. Below this floor there is no trend
+    # to follow and no stop wide enough to survive the bid-ask, so the name
+    # is dropped from ranking entirely (held positions keep their trailing
+    # stop and exit naturally — they just get no new money).
+    min_volatility: float = 0.08
     risk_budget: float = 0.20      # Target 20% annualised portfolio volatility
     # 18% x 5 slots = 90% max deployment, leaving ~10% headroom so a cash
     # account with T+2 unsettled proceeds can still fund the next entry.

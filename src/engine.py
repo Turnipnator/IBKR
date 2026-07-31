@@ -268,11 +268,32 @@ class DecisionEngine:
                     f"— slot backfilled from next-ranked signal"
                 )
 
+        # Minimum-volatility filter: cash proxies (T-bill/short-bond ETFs)
+        # score top-rank momentum by standing still in a down tape, then a
+        # sub-1% ATR stop makes the fixed ~£6 round-trip commission exceed
+        # the entire risk unit (IBTA 2026-07-29: 215% commission-to-risk).
+        # Applied to HELD symbols too — unlike cooldown, the intent is "no
+        # new money in untrendable names", and since opportunities are only
+        # generated from targets, dropping a held symbol never forces a
+        # sale: its trailing stop stays live and handles the exit.
+        min_vol = self.config.min_volatility
+        for sym, data in sorted(signals.items()):
+            if (data["volatility"] < min_vol
+                    and abs(data["combined"]) >= threshold
+                    and (self.config.enable_shorting or data["combined"] > 0)
+                    and sym not in blocked):
+                logger.info(
+                    f"  {sym}: vol {data['volatility']:.1%} below "
+                    f"{min_vol:.0%} floor — untradeable cash proxy, "
+                    f"slot backfilled from next-ranked signal"
+                )
+
         active_signals = {
             sym: data for sym, data in signals.items()
             if abs(data["combined"]) >= threshold
             and (self.config.enable_shorting or data["combined"] > 0)
             and sym not in blocked
+            and data["volatility"] >= min_vol
         }
 
         if not active_signals:
