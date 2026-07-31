@@ -284,10 +284,25 @@ class TradingBot:
             return None
         try:
             # Map symbol -> active protective stop price (TRAIL/STP), if any.
+            # IBKR reports unset numeric fields as UNSET_DOUBLE (~1.8e308) —
+            # e.g. trailStopPrice before the server has computed it — and that
+            # sentinel is truthy, so it must be filtered before display (it
+            # once reached Telegram as "SL $1797693…e+308 (-inf% away)").
+            def _px(v):
+                return v if v is not None and 0 < v < 1e300 else None
+
             stops: dict[str, float] = {}
             for tr in self.connection.ib.openTrades():
                 o = tr.order
-                sp = getattr(o, "trailStopPrice", None) or getattr(o, "auxPrice", None)
+                if o.orderType not in ("TRAIL", "STP", "STP LMT"):
+                    continue
+                if o.orderType == "TRAIL":
+                    # auxPrice on a TRAIL is the trail *amount*, not a price —
+                    # never fall back to it. Unset here just means "trailing,
+                    # server hasn't reported the level yet" -> show N/A.
+                    sp = _px(getattr(o, "trailStopPrice", None))
+                else:
+                    sp = _px(getattr(o, "auxPrice", None))
                 if sp:
                     stops[tr.contract.symbol] = sp
             out = []
