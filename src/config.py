@@ -111,7 +111,11 @@ class TradingConfig:
 
     # Position sizing - volatility-scaled (inverse ATR)
     atr_period: int = 20           # ATR lookback for volatility
-    atr_stop_multiplier: float = 3.0  # Trailing stop = 3x ATR from peak
+    atr_stop_multiplier: float = 4.0  # Trailing stop = 4x ATR from peak
+    # (3.0 until 2026-08-14; widened per user to give winners more room.
+    #  Sizing is unaffected: the max_position_pct cap binds for every name
+    #  in the universe even at 4x — verified against the 08-12 signal set.
+    #  Existing GTC stops keep their 3x trail; new/replaced stops get 4x.)
     # Minimum annualised volatility to be tradeable. Cash proxies and
     # short-duration bond ETFs (IBTA 1.3%, IDTP 2.7%, JPEA 3.9%, LQDE 5.0%,
     # DTLA 7.6%, ...) game both signal legs: TSMOM scores +1.00 because a
