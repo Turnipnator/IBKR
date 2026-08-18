@@ -139,6 +139,20 @@ class DataHealthChecker:
         if self._consecutive_failures < FAILURE_THRESHOLD:
             return False
 
+        # If the gateway is mid-login/2FA it isn't wedged, it's waiting for the
+        # user — restart_gateway() would refuse anyway (and nag on Telegram);
+        # don't send the misleading "restarting to recover" alert first.
+        login_check = getattr(self.gateway_monitor, "login_in_progress", None)
+        if callable(login_check):
+            reason = login_check()
+            if reason:
+                logger.warning(
+                    f"Data probe failing but gateway is mid-login ({reason}) — "
+                    f"not restarting; awaiting 2FA approval"
+                )
+                self.gateway_monitor._notify_awaiting_2fa(reason)  # rate-limited
+                return False
+
         # Data farm is dead - trigger recovery
         msg = (
             f"Market data probe failed {self._consecutive_failures}x. "
