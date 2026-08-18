@@ -652,6 +652,92 @@ class DecisionEngine:
 
         return opportunities
 
+    def _get_settled_cash_base(self) -> Optional[float]:
+        """Settled cash available for a new BUY, in account base currency.
+
+        On a cash account IBKR's `AvailableFunds` IS settled cash (probe
+        2026-08-18: AvailableFunds == SettledCash == BuyingPower == £638.05
+        while TotalCashValue was £1,084 with £446 of same-day proceeds
+        unsettled). It is also the figure IBKR quotes in the Error 201 text
+        ("Available settled cash converted to base: 641.69 GBP"). Returns None
+        if it can't be read, so callers fall back to the old behaviour (place
+        the full order and let IBKR decide) rather than blocking trading.
+        """
+        try:
+            summary = self.connection.get_account_summary()
+            raw = (summary.get("AvailableFunds") or {}).get("value")
+            if raw is None:
+                return None
+            val = float(raw)
+            return val if val >= 0 else None
+        except Exception as e:  # never let a read failure block an entry
+            logger.warning(f"Could not read AvailableFunds: {e}")
+            return None
+
+    def _affordable_quantity(
+        self, symbol: str, quantity: int, price: float, *, is_new_entry: bool
+    ) -> int:
+        """Trim a BUY to what settled cash covers. Returns the quantity to send
+        (0 = skip). Never scales UP.
+
+        Cost is estimated as ``quantity × price × fx × (1 + settled_cash_buffer)``
+        in base currency; the buffer covers commission plus IBKR's market-order
+        price cushion (both are what pushed the 08-17/18 EIMU orders £31/£37 over
+        the line). A trimmed NEW entry smaller than ``min_partial_entry_pct`` of
+        target is skipped — the $4 minimum commission makes tiny lots pointless
+        and the top-up path will size it properly once proceeds settle. Top-ups
+        have no floor: any extra cover is a strict improvement and the caller
+        already gated on the 30% drift threshold.
+        """
+        if quantity <= 0 or price <= 0:
+            return 0
+        settled = self._get_settled_cash_base()
+        if settled is None:
+            return quantity  # can't tell — behave as before
+
+        ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
+        fx = self._fx_to_base(ccy, self.connection.get_fx_rates() or {})
+        unit_cost_base = price * fx * (1.0 + self.config.settled_cash_buffer)
+        if unit_cost_base <= 0:
+            return quantity
+
+        affordable = int(settled / unit_cost_base)
+        if affordable >= quantity:
+            return quantity
+
+        base_sym = currency_symbol(self._base_currency())
+        need = quantity * unit_cost_base
+        if affordable <= 0:
+            logger.info(
+                f"  {symbol}: settled cash {base_sym}{settled:,.2f} covers 0 of "
+                f"{quantity} shares (~{base_sym}{need:,.2f} needed) — skipping "
+                f"until proceeds settle"
+            )
+            return 0
+        frac = affordable / quantity
+        if is_new_entry and frac < self.config.min_partial_entry_pct:
+            logger.info(
+                f"  {symbol}: settled cash {base_sym}{settled:,.2f} covers only "
+                f"{affordable}/{quantity} shares ({frac:.0%}, below "
+                f"{self.config.min_partial_entry_pct:.0%} floor) — skipping "
+                f"until proceeds settle"
+            )
+            return 0
+        logger.info(
+            f"  {symbol}: settled cash {base_sym}{settled:,.2f} covers "
+            f"{affordable}/{quantity} shares — trimming "
+            f"{'entry' if is_new_entry else 'top-up'} to {affordable} "
+            f"({frac:.0%} of target); remainder tops up once proceeds settle"
+        )
+        return affordable
+
+    def _base_currency(self) -> str:
+        try:
+            summary = self.connection.get_account_summary()
+            return (summary.get("NetLiquidation") or {}).get("currency") or ""
+        except Exception:
+            return ""
+
     def execute_opportunity(self, opportunity: TradeOpportunity) -> OrderResult:
         """Execute a single trade opportunity."""
         if self.dry_run:
@@ -668,10 +754,23 @@ class DecisionEngine:
             OrderAction.BUY if opportunity.decision == TradeDecision.BUY
             else OrderAction.SELL
         )
+        quantity = opportunity.position_size
+        if action == OrderAction.BUY:
+            # Cash account: trim to settled cash instead of letting IBKR reject
+            # the whole order (Error 201) and leaving the slot idle for a day.
+            quantity = self._affordable_quantity(
+                opportunity.symbol, quantity, opportunity.current_price,
+                is_new_entry=True,
+            )
+            if quantity <= 0:
+                return OrderResult(
+                    success=False,
+                    message="Insufficient settled cash — deferred until proceeds settle",
+                )
         result = self.order_manager.place_market_order(
             symbol=opportunity.symbol,
             action=action,
-            quantity=opportunity.position_size,
+            quantity=quantity,
             reason=f"Trend signal: {opportunity.signal_score:+.2f}",
         )
 
@@ -725,7 +824,7 @@ class DecisionEngine:
                 self.order_manager.place_trailing_stop_order(
                     symbol=opportunity.symbol,
                     action=stop_action,
-                    quantity=opportunity.position_size,
+                    quantity=quantity,
                     trail_amount=trail_amount,
                     initial_stop_price=opportunity.stop_loss_price,
                     reason=f"Trailing stop {self.config.atr_stop_multiplier}xATR",
@@ -738,7 +837,7 @@ class DecisionEngine:
                 self.order_manager.place_stop_order(
                     symbol=opportunity.symbol,
                     action=stop_action,
-                    quantity=opportunity.position_size,
+                    quantity=quantity,
                     stop_price=opportunity.stop_loss_price,
                     reason="Fallback fixed stop (ATR=0)",
                 )
@@ -786,6 +885,18 @@ class DecisionEngine:
             return OrderResult(
                 success=True, message=f"[DRY RUN] top-up {opportunity.symbol}"
             )
+
+        # Cash account: buy what settled cash covers rather than have IBKR
+        # reject the whole top-up. Any partial cover is a strict improvement.
+        delta = self._affordable_quantity(
+            opportunity.symbol, delta, opportunity.current_price, is_new_entry=False
+        )
+        if delta <= 0:
+            return OrderResult(
+                success=False,
+                message="Insufficient settled cash — top-up deferred until proceeds settle",
+            )
+        target = held_qty + delta  # the stop must cover exactly what we'll hold
 
         result = self.order_manager.place_market_order(
             symbol=opportunity.symbol,

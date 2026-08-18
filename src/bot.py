@@ -537,8 +537,16 @@ class TradingBot:
                             # to run for, and the sweep is gated on this count.
                             results["trades_executed"] += 1
                             if result.filled_quantity:
+                                # filled_quantity may be < target-held if the
+                                # top-up was trimmed to settled cash.
                                 logger.info(
-                                    f"  → Topped up {opp.symbol} to {target}"
+                                    f"  → Topped up {opp.symbol} to "
+                                    f"{held + result.filled_quantity}"
+                                    + (
+                                        f" (target {target})"
+                                        if held + result.filled_quantity != target
+                                        else ""
+                                    )
                                 )
                             else:
                                 logger.info(

@@ -152,6 +152,19 @@ class TradingConfig:
     # ~$4 commission, so this deliberately ignores small drift: at 0.30 a
     # position is left alone until it is under 70% of target.
     topup_drift_threshold: float = 0.30
+    # Settled-cash-aware sizing (cash account, LSE settles T+2). IBKR rejects a
+    # BUY outright (Error 201) if AvailableFunds can't cover it, and the engine
+    # used to ask for the full target or nothing: EIMU was rejected on
+    # 2026-08-14/17/18 — the last two by only £31/£37 — while sale proceeds sat
+    # unsettled and non-target holdings squatted the capital. Now an entry or
+    # top-up is trimmed to what settled cash covers. `settled_cash_buffer` is
+    # the margin IBKR needs above bare notional (commission + market-order
+    # price buffer): observed 4.3–4.8% on the three rejections, so 6% is safe.
+    # `min_partial_entry_pct`: a trimmed NEW entry below this fraction of target
+    # is skipped instead — a tiny lot just burns the $4 minimum commission and
+    # the top-up path will fill it properly once cash settles.
+    settled_cash_buffer: float = 0.06
+    min_partial_entry_pct: float = 0.50
     drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
     drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
     max_daily_loss: float = 200.0      # Daily loss limit, base GBP (~4% of £5k NLV). HARDCODED — the only risk limit that does NOT auto-scale off NLV; re-bump if capital changes.
