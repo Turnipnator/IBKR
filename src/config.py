@@ -111,11 +111,22 @@ class TradingConfig:
 
     # Position sizing - volatility-scaled (inverse ATR)
     atr_period: int = 20           # ATR lookback for volatility
-    atr_stop_multiplier: float = 4.0  # Trailing stop = 4x ATR from peak
-    # (3.0 until 2026-08-14; widened per user to give winners more room.
-    #  Sizing is unaffected: the max_position_pct cap binds for every name
-    #  in the universe even at 4x — verified against the 08-12 signal set.
-    #  Existing GTC stops keep their 3x trail; new/replaced stops get 4x.)
+    atr_stop_multiplier: float = 3.0  # Trailing stop = 3x ATR from peak
+    # 3.0 -> 4.0 on 2026-08-14 to "give winners more room"; reverted to 3.0 on
+    # 2026-08-24 because the excursion data says the premise was wrong. A trail
+    # can only close green if the trade ran further than its own width, so the
+    # achievable win rate IS the excursion distribution. Across the 26 closed
+    # round-trips (2026-05-22 -> 08-18), reconstructed from recorded initial
+    # stops + trail widths: only 7/26 (27%) ever ran >3x ATR from entry and only
+    # 5/26 (19%) ever ran >4x. Widening therefore LOWERED the ceiling on
+    # profitable exits from 27% to 19%, against an observed ex-commission win
+    # rate of 23% — the exit was already performing as well as the entry signal
+    # permitted. Replaying every trade on real bars at k = 1..8x ATR, no
+    # multiple is net-profitable (best k=1.0 at -$127), but k=4.0 (-$382) is
+    # $71 worse than k=3.0 (-$311) on this sample. Sizing is unaffected in
+    # either direction: max_position_pct binds for every name in the universe.
+    # Existing GTC stops keep their ratcheted 4x trail; new entries, top-up
+    # swaps and reconcile-placed stops get 3x, so the book migrates organically.
     # Minimum annualised volatility to be tradeable. Cash proxies and
     # short-duration bond ETFs (IBTA 1.3%, IDTP 2.7%, JPEA 3.9%, LQDE 5.0%,
     # DTLA 7.6%, ...) game both signal legs: TSMOM scores +1.00 because a
@@ -129,11 +140,14 @@ class TradingConfig:
     # stop and exit naturally — they just get no new money).
     min_volatility: float = 0.08
     risk_budget: float = 0.20      # Target 20% annualised portfolio volatility
-    # 18% x 5 slots = 90% max deployment, leaving ~10% headroom so a cash
+    # 30% x 3 slots = 90% max deployment, leaving ~10% headroom so a cash
     # account with T+2 unsettled proceeds can still fund the next entry.
-    # Raised from 15% (which paired with 8 slots) as part of the 2026-07-27
-    # commission-drag fix — see max_open_positions below.
-    max_position_pct: float = 0.18 # Max 18% of equity per position
+    # Raised 15% -> 18% (with 8 -> 5 slots) on 2026-07-27, then 18% -> 30%
+    # (with 5 -> 3 slots) on 2026-08-24 — the per-position cap must rise in
+    # step with each slot cut or total deployment falls with the slot count.
+    # This cap binds for every name in the universe, so it (not risk_budget)
+    # is what actually sets position size — see max_open_positions below.
+    max_position_pct: float = 0.30 # Max 30% of equity per position
     max_asset_class_pct: float = 0.40  # Max 40% in any asset class
     max_gross_exposure: float = 1.0    # No leverage — cash account
 
@@ -190,7 +204,27 @@ class TradingConfig:
     # No trend-following edge survives that. Fewer, larger positions spread the
     # fixed cost over more capital: measured 43% -> 15% on the 2026-07-27 book.
     # 5 also matches reality: only 6-7 names clear signal_threshold at any time.
-    max_open_positions: int = 5
+    #
+    # Cut 5 -> 3 on 2026-08-24. Same disease, same medicine, now measured rather
+    # than argued. Backtested over the 23-instrument universe on real bars
+    # (2025-06-18 -> 2026-08-24 plus the 2026-05-18+ window where the 252d
+    # lookback is complete), 3 slots beat 5 in ALL EIGHT paired comparisons —
+    # both windows x both deployment levels x daily and monthly cadence. It was
+    # the most robust result in the study. Mechanism is arithmetic, not
+    # statistical: IBKR's $4/order minimum makes a round-trip ~$8 regardless of
+    # size, so cost per trade is a fixed number divided by position size. At
+    # £4.6k NLV with the 40% asset-class cap binding, position = NLV x 0.40/slots,
+    # so 5 -> 3 slots takes each position $505 -> $841 and the fee per round-trip
+    # 1.59% -> 0.95% of notional. Measured live drag before the change was ~11.8%
+    # of NLV per year (median position $351 = 2.28%/trip, ~93 trades/yr) — larger
+    # than any edge the signal has demonstrated (rank IC vs 20d forward returns:
+    # +0.056 over 14 months, -0.027 over the live period).
+    #
+    # Nothing is force-sold when this drops: opportunities are generated only
+    # from `targets` and there is no sell-loop over non-target holdings, so names
+    # falling out of the top 3 simply stop being topped up and exit on their
+    # existing trailing stops. The book converges 7 -> 3 as stops fire.
+    max_open_positions: int = 3
 
     # Universe version — bump when the instrument set changes; useful for
     # cross-referencing portfolio snapshots vs. the universe in effect at the time.
