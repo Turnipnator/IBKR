@@ -148,6 +148,86 @@ class TestRestoreOnFailure:
         assert om.place_trailing_stop_order.call_count == 1
 
 
+class TestRatchetIsKept:
+    """2026-08-28: a top-up swap used to re-arm at price - kxATR regardless of
+    where the old stop had ratcheted to. The old trigger must win when higher."""
+
+    def _placed_trigger(self, om):
+        return om.place_trailing_stop_order.call_args_list[0].kwargs["initial_stop_price"]
+
+    def test_fresh_level_below_old_ratchet_is_lifted_to_the_ratchet(self, caplog):
+        om = _om([_stop(trigger=7.10)], [OrderResult(success=True, order_id=800)])
+        with caplog.at_level("INFO"):
+            res = _replace(om, trigger=6.90)
+        assert res.success is True
+        assert self._placed_trigger(om) == 7.10
+        assert any("keeping ratcheted trigger 7.1000" in r.message for r in caplog.records)
+
+    def test_fresh_level_above_old_ratchet_is_used_as_is(self):
+        om = _om([_stop(trigger=6.883)], [OrderResult(success=True, order_id=801)])
+        _replace(om, trigger=6.90)
+        assert self._placed_trigger(om) == 6.90
+
+    def test_no_fresh_level_falls_back_to_the_ratchet(self):
+        om = _om([_stop(trigger=7.10)], [OrderResult(success=True, order_id=802)])
+        _replace(om, trigger=None)
+        assert self._placed_trigger(om) == 7.10
+
+    def test_unset_sentinel_and_zero_are_ignored(self):
+        om = _om([_stop(trigger=UNSET_DOUBLE), _stop(order_id=502, trigger=0.0)],
+                 [OrderResult(success=True, order_id=803)])
+        _replace(om, trigger=6.90)
+        assert self._placed_trigger(om) == 6.90
+
+    def test_highest_of_several_old_stops_wins_for_a_sell(self):
+        om = _om([_stop(order_id=501, trigger=7.00), _stop(order_id=502, trigger=7.20)],
+                 [OrderResult(success=True, order_id=804)])
+        _replace(om, trigger=6.90)
+        assert self._placed_trigger(om) == 7.20
+
+    def test_buy_stop_short_cover_keeps_the_lowest(self):
+        stop = _stop(trigger=6.50); stop.order.action = "BUY"
+        om = _om([stop], [OrderResult(success=True, order_id=805)])
+        om.replace_trailing_stop(symbol="EIMU", action=OrderAction.BUY, quantity=10,
+                                 trail_amount=0.3, initial_stop_price=6.80, reason="t")
+        assert self._placed_trigger(om) == 6.50
+
+    def test_restore_after_failure_still_uses_each_old_stops_own_trigger(self):
+        om = _om([_stop(trigger=7.10)], [
+            OrderResult(success=False, message="rejected"),
+            OrderResult(success=True, order_id=806),
+        ])
+        _replace(om, trigger=6.90)
+        first, second = om.place_trailing_stop_order.call_args_list
+        assert first.kwargs["initial_stop_price"] == 7.10      # lifted replacement
+        assert second.kwargs["initial_stop_price"] == 7.10     # restore of the original
+
+    def test_through_the_real_top_up_position(self):
+        """DecisionEngine.top_up_position -> real replace_trailing_stop: the
+        engine passes its fresh price-3xATR level (6.90) and the working stop's
+        7.10 ratchet must be what lands on the book, covering the full position."""
+        from src.engine import DecisionEngine
+        om = _om([_stop(qty=110, trigger=7.10)], [OrderResult(success=True, order_id=807)])
+        filled_trade = SimpleNamespace(orderStatus=SimpleNamespace(status="Filled"), log=[])
+        om.place_market_order = MagicMock(return_value=OrderResult(success=True, order_id=700, trade=filled_trade))
+        eng = DecisionEngine.__new__(DecisionEngine)
+        eng.dry_run = False
+        eng.config = SimpleNamespace(atr_stop_multiplier=3.0)
+        eng.order_manager = om
+        eng.connection = om.connection
+        eng._affordable_quantity = lambda sym, qty, price, *, is_new_entry: qty
+        opp = SimpleNamespace(symbol="EIMU", position_size=141, current_price=7.40,
+                              signal_score=0.9, atr_value=0.1667, stop_loss_price=6.90)
+        res = eng.top_up_position(opp, held_qty=110)
+        assert res.success is True and res.filled_quantity == 31
+        om.place_market_order.assert_called_once()
+        assert om.place_market_order.call_args.kwargs["quantity"] == 31
+        kw = om.place_trailing_stop_order.call_args_list[0].kwargs
+        assert kw["quantity"] == 141
+        assert kw["initial_stop_price"] == 7.10
+        assert kw["trail_amount"] == pytest.approx(0.5001)
+
+
 class TestUnchangedPaths:
 
     def test_success_path_places_once_and_never_restores(self):

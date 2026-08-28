@@ -137,19 +137,30 @@ class TestSizing:
         assert targets["IJPN"]["target_shares"] == 75
         assert targets["IJPN"]["target_weight"] == pytest.approx(75 * 18.65 / NLV_20260828, rel=1e-6)
 
-    def test_gbx_and_usd_names_share_the_asset_class_cap_correctly(self):
-        """EQQQ (22.6%) + IJPN (29.7%) are both equity → scaled to the 40% class
-        cap. The scaling must operate on the GBP notional, not the pence figure."""
+    def test_gbx_names_are_measured_in_pounds_against_the_class_cap(self):
+        """EQQQ (22.6%) + IJPN (29.7%) are both equity = 52.3% of NLV in GBP.
+        Under the 60% class cap that is unscaled (2 + 75 shares); measured in
+        pence it would be a 5,000% "exposure" and scaled to dust."""
         eng = _engine()
+        cap = eng.config.max_asset_class_pct
         targets = eng._calculate_target_positions(_signals(EQQQ=EQQQ, IJPN=IJPN), NLV_20260828)
         assert set(targets) == {"EQQQ", "IJPN"}
         gross = sum(abs(t["target_weight"]) for t in targets.values())
-        assert gross <= 0.40 + 1e-9
-        assert gross > 0.30
+        assert gross <= cap + 1e-9
+        assert gross == pytest.approx((2 * 533.08 + 75 * 18.65) / NLV_20260828, rel=1e-3)
+        assert targets["EQQQ"]["target_shares"] == 2
+        assert targets["IJPN"]["target_shares"] == 75
         for t in targets.values():
-            assert t["target_shares"] >= 1
             assert t["target_weight"] == pytest.approx(
                 t["target_shares"] * t["price"] * t["fx_to_base"] / NLV_20260828, rel=1e-6)
+
+    def test_gbx_names_are_scaled_when_they_do_exceed_the_class_cap(self, monkeypatch):
+        eng = _engine()
+        eng.config.max_asset_class_pct = 0.40
+        targets = eng._calculate_target_positions(_signals(EQQQ=EQQQ, IJPN=IJPN), NLV_20260828)
+        gross = sum(abs(t["target_weight"]) for t in targets.values())
+        assert 0.30 < gross <= 0.40 + 1e-9
+        assert targets["EQQQ"]["target_shares"] >= 1 and targets["IJPN"]["target_shares"] >= 1
 
     def test_mixed_book_ranks_and_sizes_across_units(self):
         eng = _engine()

@@ -1,10 +1,10 @@
 {
   "version": "v2_ucits",
-  "notes": "UCITS-on-LSE universe. 23 instruments after EU/UK PRIIPs migration from US-listed ETFs (IJPN dropped 2026-08-14: ~£1.9k/share, unaffordable within per-position cap at current NLV). Contract details (currency/exchange) live in src/contracts.py.",
+  "notes": "UCITS-on-LSE universe. 24 instruments after EU/UK PRIIPs migration from US-listed ETFs. IJPN was dropped 2026-08-14 as '~£1.9k/share, unaffordable' and re-added 2026-08-28: its LSE GBP line is quoted in PENCE (IBKR priceMagnifier=100; 1,865 = £18.65) — see src/contracts.py (GBX). Contract details (currency/exchange) live in src/contracts.py.",
   "symbols": {
-    "equity":    ["CSPX", "EQQQ", "RTWO", "EIMU", "VEUR", "CNYA"],
-    "bond":      ["DTLA", "IDTM", "IBTA", "LQDE", "IHYU", "JPEA", "IDTP"],
+    "equity": ["CSPX", "EQQQ", "RTWO", "EIMU", "VEUR", "CNYA", "IJPN"],
+    "bond": ["DTLA", "IDTM", "IBTA", "LQDE", "IHYU", "JPEA", "IDTP"],
     "commodity": ["IGLN", "ISLN", "CRUD", "NGAS", "AIGA", "AIGI", "CMOD", "COPA", "AIGS"],
-    "alt":       ["IDUP"]
+    "alt": ["IDUP"]
   }
 }

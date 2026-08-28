@@ -496,6 +496,26 @@ class OrderManager:
             return OrderResult(success=False, message="Not connected to IBKR")
 
         existing = self.protective_stops_for(symbol, action.value)
+
+        # Never re-arm below the level the old stop had already ratcheted to.
+        # Callers pass a fresh price-minus-kxATR trigger; when price has run and
+        # pulled back that sits BELOW the working stop's trailStopPrice, and the
+        # swap would silently give protection back (2026-08-28 replay: 38 of 45
+        # simulated top-ups lowered the stop, ~1.1% of price on average).
+        ratchet = self._ratcheted_trigger(existing, action)
+        if ratchet is not None:
+            fresh = initial_stop_price
+            if (
+                fresh is None
+                or (action == OrderAction.SELL and ratchet > fresh)
+                or (action == OrderAction.BUY and ratchet < fresh)
+            ):
+                logger.info(
+                    f"{symbol}: keeping ratcheted trigger {ratchet:.4f} — the "
+                    f"fresh trail level {fresh} would have lowered protection"
+                )
+                initial_stop_price = ratchet
+
         for t in existing:
             self.cancel_order(t.order.orderId)
 
@@ -556,6 +576,24 @@ class OrderManager:
                 f"restored; reconcile sweep will re-place"
             )
         return result
+
+    @staticmethod
+    def _ratcheted_trigger(stops: list, action: OrderAction):
+        """Best current trigger among working stops: highest for a SELL stop
+        (long protection), lowest for a BUY stop. Ignores IBKR's UNSET_DOUBLE
+        sentinel (~1.8e308) and unset/zero values. None if nothing usable."""
+        levels = []
+        for t in stops:
+            v = getattr(t.order, "trailStopPrice", None)
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if 0 < v < 1e300:
+                levels.append(v)
+        if not levels:
+            return None
+        return max(levels) if action == OrderAction.SELL else min(levels)
 
     def _restore_stops(
         self, symbol: str, action: OrderAction, cancelled: list, reason

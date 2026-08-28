@@ -115,7 +115,7 @@ class TestSlotCountAndSizing:
         assert c.atr_stop_multiplier == 3.0
         # unchanged by this work — asserted so a future edit can't drift them
         # without a test failing
-        assert c.max_asset_class_pct == 0.40
+        assert c.max_asset_class_pct == 0.60   # 0.40 -> 0.60 on 2026-08-28
         assert c.min_volatility == 0.08
         assert c.risk_budget == 0.20
 
@@ -134,19 +134,23 @@ class TestSlotCountAndSizing:
         assert "CRUD" not in targets
 
     def test_each_position_is_about_one_third_of_the_asset_class_cap(self):
-        """All three names are commodity, so the 40% class cap binds and each
-        position lands at ~40%/3 = 13.3% of NLV — up from ~8% at 5 slots."""
+        """All three names are commodity, so the class cap binds and each
+        position lands at ~cap/3 of NLV: 13.3% under the original 40% cap,
+        ~20% since the 2026-08-28 move to 60% (2 x the per-name cap)."""
         eng = _engine()
+        cap = eng.config.max_asset_class_pct
         targets = eng._calculate_target_positions(_signals(), CAPITAL_20260824)
         for sym, w in _weights(targets).items():
-            assert 0.11 <= w <= 0.145, f"{sym} weight {w:.3f} outside 11-14.5%"
+            assert cap / 3 - 0.03 <= w <= cap / 3 + 0.005, (
+                f"{sym} weight {w:.3f} not ~{cap / 3:.3f}")
 
     def test_gross_exposure_still_lands_on_the_asset_class_cap(self):
         """The change must not alter total exposure — only how it is divided."""
         eng = _engine()
         targets = eng._calculate_target_positions(_signals(), CAPITAL_20260824)
         gross = sum(_weights(targets).values())
-        assert 0.36 <= gross <= 0.40, f"gross {gross:.3f} not ~40%"
+        cap = eng.config.max_asset_class_pct
+        assert cap - 0.04 <= gross <= cap + 1e-9, f"gross {gross:.3f} not ~{cap:.0%}"
 
     def test_positions_are_materially_bigger_than_under_the_old_config(self):
         """The whole point of the change: fee per round-trip is $8 / position,

@@ -149,7 +149,14 @@ class TradingConfig:
     # This cap binds for every name in the universe, so it (not risk_budget)
     # is what actually sets position size — see max_open_positions below.
     max_position_pct: float = 0.30 # Max 30% of equity per position
-    max_asset_class_pct: float = 0.40  # Max 40% in any asset class
+    # 0.40 -> 0.60 on 2026-08-28 (research_notes.md). The 40% figure was sized
+    # for the 8-slot/15% book: at 3 slots x 30% any TWO targets in one class
+    # already exceed it, so it bound on ~88% of replayed days, held target gross
+    # to ~63% (vs ~81%), and manufactured top-ups. 0.60 = 2 x max_position_pct,
+    # the smallest cap that only fires on a genuinely single-class top-3 (~13%
+    # of days). Returns/DD across caps were a coin flip — this is about
+    # deployment and churn, not edge. Raise it again if max_position_pct rises.
+    max_asset_class_pct: float = 0.60  # Max 60% in any asset class
     max_gross_exposure: float = 1.0    # No leverage — cash account
 
     # Risk management
