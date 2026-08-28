@@ -7,6 +7,18 @@ routing with primary_exchange='LSEETF'.
 
 Currency is per-symbol because USD-class doesn't exist for every fund;
 where it doesn't (EQQQ, VEUR, IJPN) we use the GBP share class.
+
+Price units matter as much as currency. IBKR quotes some LSE GBP lines in
+PENCE (ContractDetails.priceMagnifier == 100) while still labelling the
+contract currency "GBP": read-only probe 2026-08-28 — EQQQ close 53,603 and
+IJPN 1,865 "GBP" are really £536.03 and £18.65; VEUR (magnifier 1) is a
+genuine £43.51. Sizing off the raw number treated EQQQ as a £53k share (0
+shares, silently never bought) and got IJPN dropped from the universe on
+2026-08-14 as "£1.9k/share, unaffordable". Such lines are registered as
+"GBX" (100 GBX = 1 GBP): the engine converts at 0.01 GBP per price unit and
+`resolve_contract` still builds the IBKR contract with currency "GBP".
+Order prices (stop triggers, trail amounts) stay in pence — that is the
+unit IBKR expects for these contracts.
 """
 import asyncio
 try:
@@ -19,15 +31,20 @@ from ib_insync import Stock
 DEFAULT_EXCHANGE = "SMART"
 DEFAULT_PRIMARY_EXCHANGE = "LSEETF"
 
+# Registry currency -> the currency IBKR wants on the contract. "GBX" is a
+# price-unit tag (pence-quoted GBP line), not an IBKR currency.
+IBKR_CURRENCY = {"GBX": "GBP"}
+GBX_PER_GBP = 100.0
+
 # symbol -> (currency, primary_exchange)
 CONTRACT_REGISTRY: dict[str, tuple[str, str]] = {
     # === equity ===
     "CSPX": ("USD", "LSEETF"),   # iShares Core S&P 500 UCITS USD Acc
-    "EQQQ": ("GBP", "LSEETF"),   # Invesco Nasdaq-100 UCITS (USD-class only on EBS)
+    "EQQQ": ("GBX", "LSEETF"),   # Invesco Nasdaq-100 UCITS (USD-class only on EBS) — PENCE
     "RTWO": ("USD", "LSEETF"),   # SPDR Russell 2000 US Small Cap UCITS USD
     "EIMU": ("USD", "LSEETF"),   # iShares Core MSCI EM IMI UCITS USD Acc
     "VEUR": ("GBP", "LSEETF"),   # Vanguard FTSE Developed Europe UCITS
-    "IJPN": ("GBP", "LSEETF"),   # iShares MSCI Japan UCITS (USD-class MXJP too thin)
+    "IJPN": ("GBX", "LSEETF"),   # iShares MSCI Japan UCITS (USD-class MXJP too thin) — PENCE
     "CNYA": ("USD", "LSEETF"),   # iShares MSCI China A UCITS USD Acc
     # === bond ===
     "DTLA": ("USD", "LSEETF"),   # iShares $ Treasury Bond 20+yr UCITS USD
@@ -65,4 +82,5 @@ def resolve_contract(symbol: str) -> Stock:
             f"Known: {sorted(CONTRACT_REGISTRY)}"
         )
     currency, primary = CONTRACT_REGISTRY[symbol]
+    currency = IBKR_CURRENCY.get(currency, currency)
     return Stock(symbol, DEFAULT_EXCHANGE, currency, primaryExchange=primary)

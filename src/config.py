@@ -35,6 +35,7 @@ _WATCHLIST_PATH = Path(os.getenv("WATCHLIST_PATH", "data/watchlist.json"))
 _CURRENCY_SYMBOLS = {
     "USD": "$", "GBP": "£", "EUR": "€", "JPY": "¥",
     "CAD": "C$", "AUD": "A$", "CHF": "CHF ",
+    "GBX": "p",  # pence-quoted LSE lines (see contracts.py)
 }
 
 

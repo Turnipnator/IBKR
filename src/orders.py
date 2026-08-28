@@ -529,12 +529,74 @@ class OrderManager:
                 f"{symbol}: protective stop replaced — now covering "
                 f"{quantity} share(s) (was {len(existing)} order(s))"
             )
+            return result
+
+        # The old stops are gone and the new one never landed. Put the old
+        # cover straight back rather than leaving it to the post-rebalance
+        # sweep: 30-120s naked is survivable, but there is no reason to spend
+        # it. The restored stops keep their ratcheted trigger, so nothing is
+        # lost; only the top-up shares stay uncovered until reconcile.
+        logger.error(
+            f"{symbol}: replacement stop failed ({result.message}) — "
+            f"restoring {len(existing)} cancelled stop(s)"
+        )
+        restored = self._restore_stops(symbol, action, existing, reason)
+        if existing and restored == len(existing):
+            logger.info(
+                f"{symbol}: previous cover restored ({restored} stop(s)); "
+                f"any top-up shares stay uncovered until reconcile"
+            )
+            result.message = (
+                f"replacement failed ({result.message}); previous cover restored"
+            )
         else:
             logger.error(
-                f"{symbol}: NAKED — cancelled {len(existing)} stop(s) but "
-                f"replacement failed: {result.message}"
+                f"{symbol}: NAKED — cancelled {len(existing)} stop(s), "
+                f"replacement failed and only {restored}/{len(existing)} "
+                f"restored; reconcile sweep will re-place"
             )
         return result
+
+    def _restore_stops(
+        self, symbol: str, action: OrderAction, cancelled: list, reason
+    ) -> int:
+        """Re-place stops that `replace_trailing_stop` cancelled, each with its
+        original remaining quantity, trail amount and ratcheted trigger.
+        Returns how many were successfully re-placed."""
+        restored = 0
+        for t in cancelled:
+            try:
+                if callable(getattr(t, "remaining", None)):
+                    qty = int(t.remaining())
+                else:
+                    qty = int(t.order.totalQuantity)
+                trail = float(getattr(t.order, "auxPrice", 0) or 0)
+                trigger = getattr(t.order, "trailStopPrice", None)
+                # IBKR's UNSET_DOUBLE sentinel (~1.8e308) means "not set".
+                if not trigger or not (0 < trigger < 1e300):
+                    trigger = None
+                r = self.place_trailing_stop_order(
+                    symbol=symbol,
+                    action=action,
+                    quantity=qty,
+                    trail_amount=trail,
+                    initial_stop_price=trigger,
+                    reason=(
+                        f"Restore after failed replacement "
+                        f"({reason or 'no reason'})"
+                    ),
+                )
+                if r.success:
+                    restored += 1
+                else:
+                    logger.error(
+                        f"{symbol}: could not restore stop "
+                        f"{getattr(t.order, 'orderId', '?')} ({qty} sh, "
+                        f"trail {trail}): {r.message}"
+                    )
+            except Exception as e:
+                logger.error(f"{symbol}: error restoring stop: {e}")
+        return restored
 
     def cancel_order(self, order_id: int) -> bool:
         """Cancel an open order by ID."""

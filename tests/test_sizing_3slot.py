@@ -273,14 +273,28 @@ class TestFiltersStillApply:
         assert "AIGS" in targets
 
     def test_unaffordable_name_is_skipped_and_the_slot_backfills(self):
-        """EQQQ is ~£52k/share — 0 shares within a 30% cap at £4.6k NLV. It must
-        not burn a slot. (Its +0.06 signal is below threshold here, so raise it
-        above every long to prove the skip rather than the filter.)"""
+        """A name whose single share exceeds the 30% cap (~£1,384 at £4.6k NLV)
+        must not burn a slot. Synthetic: CSPX at $25,000 (~£18k). EQQQ used to
+        be the example here — but its 52,210 is PENCE (£522; IBKR
+        priceMagnifier=100), so since the 2026-08-28 GBX fix it is affordable
+        (2 shares) and correctly takes a slot; see test_gbx_pricing.py."""
+        snap = dict(SNAPSHOT_20260824)
+        snap["CSPX"] = (+1.00, 25000.00, 300.00, 0.116)
+        targets = _engine()._calculate_target_positions(
+            _signals(snap), CAPITAL_20260824)
+        assert "CSPX" not in targets
+        assert len(targets) == 3
+
+    def test_eqqq_is_affordable_once_its_pence_quote_is_understood(self):
+        """The flip side of the test above: the real 2026-08-24 snapshot with
+        EQQQ promoted to the top signal now yields a 2-share (~£1,044, 22.6%)
+        equity target instead of a silently burned slot."""
         snap = dict(SNAPSHOT_20260824)
         snap["EQQQ"] = (+1.00, 52210.00, 796.70, 0.190)
         targets = _engine()._calculate_target_positions(
             _signals(snap), CAPITAL_20260824)
-        assert "EQQQ" not in targets
+        assert targets["EQQQ"]["target_shares"] == 2
+        assert targets["EQQQ"]["fx_to_base"] == pytest.approx(0.01)
         assert len(targets) == 3
 
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .connection import ConnectionManager, get_connection
-from .contracts import CONTRACT_REGISTRY
+from .contracts import CONTRACT_REGISTRY, GBX_PER_GBP
 from .data_fetcher import DataFetcher
 from .database import Database
 from .indicators import (
@@ -199,6 +199,10 @@ class DecisionEngine:
         """
         if not currency or currency in ("BASE", ""):
             return 1.0
+        if currency == "GBX":
+            # Pence-quoted LSE line (IBKR priceMagnifier=100; see contracts.py).
+            # 100 GBX = 1 GBP, so BASE per 1 GBX is a hundredth of BASE per GBP.
+            return self._fx_to_base("GBP", fx_rates) / GBX_PER_GBP
         rate = fx_rates.get(currency)
         if rate is None:
             logger.warning(
@@ -219,7 +223,7 @@ class DecisionEngine:
         Currency handling:
             `capital` is in the account's base currency (GBP for this account).
             Prices and ATRs come from IBKR in each contract's local currency
-            (USD for most UCITS, GBP for EQQQ/VEUR/IJPN). Sizing must be done
+            (USD for most UCITS, GBP for VEUR, GBX/pence for EQQQ/IJPN). Sizing must be done
             in the contract's local currency to avoid implicit FX errors.
 
             Per-symbol we convert `capital` -> `capital_local` using IBKR's

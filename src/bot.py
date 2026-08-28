@@ -496,109 +496,7 @@ class TradingBot:
                     "Daily-loss halt active — skipping all live entries this cycle"
                 )
                 opportunities = []
-            # Quantities, not just symbols — a held symbol may still be far
-            # below target and need topping up in the execution loop below.
-            held_qty = {
-                p.symbol: p.quantity
-                for p in self.engine.position_manager.get_positions()
-                if p.quantity != 0
-            }
-            current_positions = set(held_qty)
-            # Pending entry orders not yet filled (e.g. submitted just before a
-            # crash). Same-symbol guard prevents duplicate entries on restart.
-            try:
-                pending_entries = {
-                    t.contract.symbol
-                    for t in self.engine.order_manager.get_open_orders()
-                    if t.order.orderType == "MKT"
-                }
-            except Exception as e:
-                logger.warning(f"Could not fetch open orders for dedupe: {e}")
-                pending_entries = set()
-
-            for opp in opportunities:
-                if opp.symbol in current_positions:
-                    held = held_qty.get(opp.symbol, 0)
-                    target = opp.position_size
-                    threshold = trading_config.topup_drift_threshold
-                    # Top up only when materially short of target, and only
-                    # upwards — trimming an oversized position is the trailing
-                    # stop's job, and selling here would fight it.
-                    if held > 0 and target > 0 and held < target * (1 - threshold):
-                        logger.info(
-                            f"  → Top-up: {opp.symbol} held {held} vs target "
-                            f"{target} ({held / target:.0%}) — buying "
-                            f"{target - held}"
-                        )
-                        result = self.engine.top_up_position(opp, held)
-                        if result.success:
-                            # Count it either way: an accepted-but-unfilled BUY
-                            # is exactly the case the post-rebalance sweep has
-                            # to run for, and the sweep is gated on this count.
-                            results["trades_executed"] += 1
-                            if result.filled_quantity:
-                                # filled_quantity may be < target-held if the
-                                # top-up was trimmed to settled cash.
-                                logger.info(
-                                    f"  → Topped up {opp.symbol} to "
-                                    f"{held + result.filled_quantity}"
-                                    + (
-                                        f" (target {target})"
-                                        if held + result.filled_quantity != target
-                                        else ""
-                                    )
-                                )
-                            else:
-                                logger.info(
-                                    f"  → Top-up BUY placed for {opp.symbol} "
-                                    f"(+{target - held}) but not yet filled — "
-                                    f"cover extends on reconcile"
-                                )
-                        else:
-                            logger.info(f"  → Top-up failed: {result.message}")
-                    else:
-                        logger.info(
-                            f"  → Skipped: already holding {opp.symbol} "
-                            f"({held}/{target})"
-                        )
-                    continue
-                if opp.symbol in pending_entries:
-                    logger.info(
-                        f"  → Skipped: entry order already pending for {opp.symbol}"
-                    )
-                    continue
-                result = self.engine.execute_opportunity(opp)
-                if result.success:
-                    results["trades_executed"] += 1
-                    logger.info(f"  → Executed: live order placed for {opp.symbol}")
-                else:
-                    logger.info(f"  → Failed: {result.message}")
-
-            # Catch entry-race deferrals: BUYs that filled after the engine's 5s
-            # wait window have no protective stop yet. Without this, the next
-            # reconcile sometimes didn't run for hours (intraday risk-checks fire
-            # on boot/rebalance/reconnect, not a fixed interval — see 2026-06-09
-            # incident where AIGI/COPA sat naked ~18h). Two passes cover the
-            # tail of slow fills cheaply.
-            if results["trades_executed"] > 0:
-                for delay_s in (30, 90):
-                    try:
-                        self.connection.ib.sleep(delay_s)
-                        # Log unconditionally: _reconcile_protective_stops() is
-                        # silent when it finds nothing to heal, so without this
-                        # there is no way to tell "swept, all clean" from
-                        # "never ran" (2026-07-27 healthcheck spent a while
-                        # timing the 120s gap to prove it was firing).
-                        healed = self._reconcile_protective_stops()
-                        logger.info(
-                            f"Post-rebalance stop sweep (+{delay_s}s): "
-                            f"{healed} stop(s) placed"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Post-rebalance reconcile sweep failed: {e}"
-                        )
-                        break
+            self._execute_live(opportunities, results)
 
         # Send analysis notification
         if self.notifier and self.notifier.enabled:
@@ -611,6 +509,156 @@ class TradingBot:
 
         logger.info("\n" + self.engine.get_status_report())
         return results
+
+    def _execute_live(self, opportunities: list, results: dict) -> None:
+        """Place live orders for this cycle's opportunities, then sweep for
+        naked lots.
+
+        Each name is isolated: an unexpected exception on one symbol must not
+        abort the rest of the book, and must not skip the post-rebalance stop
+        sweep — an entry BUY may already be resting at IBKR when the exception
+        fires, which is exactly the case the sweep exists for. IBKR-level order
+        failures are already caught inside OrderManager/engine and returned as
+        OrderResult; this guards the code path *around* them (2026-08-28
+        review: previously one raise here skipped every later name and the
+        sweep, leaving any filled BUY naked until the next risk check).
+        """
+        # Quantities, not just symbols — a held symbol may still be far
+        # below target and need topping up in the execution loop below.
+        held_qty = {
+            p.symbol: p.quantity
+            for p in self.engine.position_manager.get_positions()
+            if p.quantity != 0
+        }
+        # Pending entry orders not yet filled (e.g. submitted just before a
+        # crash). Same-symbol guard prevents duplicate entries on restart.
+        try:
+            pending_entries = {
+                t.contract.symbol
+                for t in self.engine.order_manager.get_open_orders()
+                if t.order.orderType == "MKT"
+            }
+        except Exception as e:
+            logger.warning(f"Could not fetch open orders for dedupe: {e}")
+            pending_entries = set()
+
+        force_sweep = False
+        try:
+            for opp in opportunities:
+                try:
+                    self._execute_one(opp, held_qty, pending_entries, results)
+                except Exception as e:
+                    # Unknown state for this name: an order may or may not be
+                    # resting. Carry on with the rest and force the sweep.
+                    force_sweep = True
+                    logger.error(
+                        f"Live execution failed for {opp.symbol}: {e} — "
+                        f"continuing with remaining names; forcing the "
+                        f"post-rebalance stop sweep",
+                        exc_info=True,
+                    )
+                    if self.notifier and self.notifier.enabled:
+                        try:
+                            self.notifier.notify_error(
+                                f"Live execution failed for {opp.symbol}: {e}. "
+                                f"Remaining names still processed; protective-"
+                                f"stop sweep forced.",
+                                "Live execution",
+                            )
+                        except Exception as ne:
+                            logger.warning(
+                                f"Could not send execution-failure alert: {ne}"
+                            )
+        finally:
+            if results["trades_executed"] > 0 or force_sweep:
+                self._post_rebalance_stop_sweep()
+
+    def _execute_one(
+        self, opp, held_qty: dict, pending_entries: set, results: dict
+    ) -> None:
+        """Top up, skip, or enter a single opportunity (live mode)."""
+        if opp.symbol in held_qty:
+            held = held_qty.get(opp.symbol, 0)
+            target = opp.position_size
+            threshold = trading_config.topup_drift_threshold
+            # Top up only when materially short of target, and only
+            # upwards — trimming an oversized position is the trailing
+            # stop's job, and selling here would fight it.
+            if held > 0 and target > 0 and held < target * (1 - threshold):
+                logger.info(
+                    f"  → Top-up: {opp.symbol} held {held} vs target "
+                    f"{target} ({held / target:.0%}) — buying "
+                    f"{target - held}"
+                )
+                result = self.engine.top_up_position(opp, held)
+                if result.success:
+                    # Count it either way: an accepted-but-unfilled BUY
+                    # is exactly the case the post-rebalance sweep has
+                    # to run for, and the sweep is gated on this count.
+                    results["trades_executed"] += 1
+                    if result.filled_quantity:
+                        # filled_quantity may be < target-held if the
+                        # top-up was trimmed to settled cash.
+                        logger.info(
+                            f"  → Topped up {opp.symbol} to "
+                            f"{held + result.filled_quantity}"
+                            + (
+                                f" (target {target})"
+                                if held + result.filled_quantity != target
+                                else ""
+                            )
+                        )
+                    else:
+                        logger.info(
+                            f"  → Top-up BUY placed for {opp.symbol} "
+                            f"(+{target - held}) but not yet filled — "
+                            f"cover extends on reconcile"
+                        )
+                else:
+                    logger.info(f"  → Top-up failed: {result.message}")
+            else:
+                logger.info(
+                    f"  → Skipped: already holding {opp.symbol} "
+                    f"({held}/{target})"
+                )
+            return
+        if opp.symbol in pending_entries:
+            logger.info(
+                f"  → Skipped: entry order already pending for {opp.symbol}"
+            )
+            return
+        result = self.engine.execute_opportunity(opp)
+        if result.success:
+            results["trades_executed"] += 1
+            logger.info(f"  → Executed: live order placed for {opp.symbol}")
+        else:
+            logger.info(f"  → Failed: {result.message}")
+
+    def _post_rebalance_stop_sweep(self) -> None:
+        # Catch entry-race deferrals: BUYs that filled after the engine's 5s
+        # wait window have no protective stop yet. Without this, the next
+        # reconcile sometimes didn't run for hours (intraday risk-checks fire
+        # on boot/rebalance/reconnect, not a fixed interval — see 2026-06-09
+        # incident where AIGI/COPA sat naked ~18h). Two passes cover the
+        # tail of slow fills cheaply.
+        for delay_s in (30, 90):
+            try:
+                self.connection.ib.sleep(delay_s)
+                # Log unconditionally: _reconcile_protective_stops() is
+                # silent when it finds nothing to heal, so without this
+                # there is no way to tell "swept, all clean" from
+                # "never ran" (2026-07-27 healthcheck spent a while
+                # timing the 120s gap to prove it was firing).
+                healed = self._reconcile_protective_stops()
+                logger.info(
+                    f"Post-rebalance stop sweep (+{delay_s}s): "
+                    f"{healed} stop(s) placed"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Post-rebalance reconcile sweep failed: {e}"
+                )
+                break
 
     @property
     def config_max_positions(self) -> int:
