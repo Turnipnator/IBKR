@@ -25,6 +25,17 @@ def _mk_bars(n: int = 2):
     return [MagicMock() for _ in range(n)]
 
 
+def _mk_gateway(login_reason=None):
+    """Gateway monitor mock. login_reason=None means "not mid-login/2FA".
+
+    A bare MagicMock() returns a truthy mock from login_in_progress(), which
+    trips the mid-login guard (86ae98a) and skips the restart path entirely.
+    """
+    gw = MagicMock()
+    gw.login_in_progress.return_value = login_reason
+    return gw
+
+
 class TestProbe:
     def test_probe_returns_true_on_success(self):
         conn = _mk_connection()
@@ -106,7 +117,7 @@ class TestCheckAndHeal:
     def test_healthy_no_recovery(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = _mk_bars(2)
-        gw = MagicMock()
+        gw = _mk_gateway()
 
         checker = DataHealthChecker(conn, gw)
         result = checker.check_and_heal()
@@ -118,7 +129,7 @@ class TestCheckAndHeal:
     def test_below_threshold_no_recovery(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = []  # empty = failure
-        gw = MagicMock()
+        gw = _mk_gateway()
 
         checker = DataHealthChecker(conn, gw)
         # First failure only - not over threshold
@@ -131,7 +142,7 @@ class TestCheckAndHeal:
     def test_at_threshold_triggers_recovery(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = []  # every probe fails
-        gw = MagicMock()
+        gw = _mk_gateway()
         gw.restart_gateway.return_value = True
 
         # After restart, connection reconnects successfully
@@ -155,7 +166,7 @@ class TestCheckAndHeal:
     def test_recovery_aborts_when_gateway_restart_fails(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = []
-        gw = MagicMock()
+        gw = _mk_gateway()
         gw.restart_gateway.return_value = False  # hit daily limit, etc
 
         checker = DataHealthChecker(conn, gw)
@@ -170,7 +181,7 @@ class TestCheckAndHeal:
     def test_recovery_notifies_on_failure(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = []
-        gw = MagicMock()
+        gw = _mk_gateway()
         gw.restart_gateway.return_value = True
         conn.ensure_connected.return_value = True
 
@@ -187,7 +198,7 @@ class TestCheckAndHeal:
     def test_recovery_notifies_on_successful_heal(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = []
-        gw = MagicMock()
+        gw = _mk_gateway()
         gw.restart_gateway.return_value = True
         conn.ensure_connected.return_value = True
 
@@ -205,7 +216,7 @@ class TestCheckAndHeal:
     def test_recovery_failed_reconnect(self):
         conn = _mk_connection()
         conn.ib.reqHistoricalData.return_value = []
-        gw = MagicMock()
+        gw = _mk_gateway()
         gw.restart_gateway.return_value = True
         conn.ensure_connected.return_value = False  # reconnect failed
 
@@ -217,4 +228,30 @@ class TestCheckAndHeal:
         conn.disconnect.assert_called_once()
         assert result is False
         # Counter NOT reset since we didn't heal
+        assert checker.consecutive_failures == FAILURE_THRESHOLD
+
+    def test_no_restart_while_gateway_mid_login(self):
+        """Mid-login/2FA guard: at threshold the checker must NOT restart the
+        gateway (that would kill the outstanding push — the 2026-08-17
+        incident) and must NOT send the misleading "restarting to recover"
+        alert; it nags via the monitor's rate-limited 2FA path instead."""
+        conn = _mk_connection()
+        conn.ib.reqHistoricalData.return_value = []
+        gw = _mk_gateway(login_reason="2FA push outstanding (dialog open)")
+
+        notifier = MagicMock()
+        notifier.enabled = True
+
+        checker = DataHealthChecker(conn, gw, notifier=notifier)
+        for _ in range(FAILURE_THRESHOLD):
+            result = checker.check_and_heal()
+
+        assert result is False
+        gw.restart_gateway.assert_not_called()
+        conn.disconnect.assert_not_called()
+        notifier.notify_error.assert_not_called()
+        gw._notify_awaiting_2fa.assert_called_once_with(
+            "2FA push outstanding (dialog open)"
+        )
+        # Failures keep accumulating so recovery fires once login clears
         assert checker.consecutive_failures == FAILURE_THRESHOLD

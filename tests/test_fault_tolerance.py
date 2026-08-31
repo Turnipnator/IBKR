@@ -6,14 +6,46 @@ Tests for fault tolerance features:
 """
 
 import http.client
-from datetime import date
-from unittest.mock import MagicMock, patch, PropertyMock
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import MagicMock, call, patch, PropertyMock
 
 import pytest
 
 from src.gateway_monitor import GatewayMonitor, MAX_RESTARTS_PER_DAY, DOCKER_SOCKET
 from src.connection import ConnectionManager
 from src.telegram_bot import TelegramNotifier
+
+
+RESTART_PATH = "/containers/ib-gateway/restart?t=30"
+OLD_START = "2026-01-01T00:00:00.000000000Z"  # long-running container
+
+
+def _resp(status: int, body: bytes = b""):
+    r = MagicMock()
+    r.status = status
+    r.read.return_value = body
+    return r
+
+
+def _wire_docker(mock_conn, *, logs=b"", restart_status=204,
+                 restart_body=b"", started=OLD_START):
+    """Route the mocked Docker API by request path.
+
+    restart_gateway() first runs the mid-login guard (86ae98a): GET
+    /containers/.../json (uptime) and GET /containers/.../logs (IBC login
+    markers), then POSTs the restart. A single canned response can't answer
+    all three honestly — earlier versions of these tests did exactly that and
+    only passed because the guard fails open on a bad response.
+    """
+    def getresponse():
+        _method, path = mock_conn.request.call_args[0]
+        if path.endswith("/json"):
+            return _resp(200, b'{"State": {"StartedAt": "%s"}}' % started.encode())
+        if "/logs?" in path:
+            return _resp(200, logs)
+        return _resp(restart_status, restart_body)
+
+    mock_conn.getresponse.side_effect = getresponse
 
 
 # ============================================================
@@ -31,35 +63,27 @@ class TestGatewayMonitor:
     @patch("src.gateway_monitor.time.sleep")
     def test_restart_gateway_success(self, mock_sleep, mock_conn_cls):
         """Successful restart returns True and increments counter."""
-        mock_response = MagicMock()
-        mock_response.status = 204
-        mock_response.read.return_value = b""
-
         mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_response
         mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn)  # old container, quiet log -> guard passes
 
         monitor = self._make_monitor()
         result = monitor.restart_gateway()
 
         assert result is True
         assert monitor.restarts_today == 1
-        mock_conn.request.assert_called_once_with(
-            "POST", "/containers/ib-gateway/restart?t=30"
-        )
+        # Guard calls (inspect + logs) come first; the restart POST is last
+        assert mock_conn.request.call_args_list[-1] == call("POST", RESTART_PATH)
         mock_sleep.assert_called_once()
 
     @patch("src.gateway_monitor.UnixHTTPConnection")
     @patch("src.gateway_monitor.time.sleep")
     def test_restart_gateway_api_error(self, mock_sleep, mock_conn_cls):
-        """Non-204 response returns False."""
-        mock_response = MagicMock()
-        mock_response.status = 404
-        mock_response.read.return_value = b"no such container"
-
+        """Non-204 restart response returns False."""
         mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_response
         mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn, restart_status=404,
+                     restart_body=b"no such container")
 
         monitor = self._make_monitor()
         result = monitor.restart_gateway()
@@ -71,13 +95,9 @@ class TestGatewayMonitor:
     @patch("src.gateway_monitor.time.sleep")
     def test_restart_respects_daily_limit(self, mock_sleep, mock_conn_cls):
         """Restart is skipped after MAX_RESTARTS_PER_DAY."""
-        mock_response = MagicMock()
-        mock_response.status = 204
-        mock_response.read.return_value = b""
-
         mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_response
         mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn)
 
         monitor = self._make_monitor()
 
@@ -109,13 +129,9 @@ class TestGatewayMonitor:
     @patch("src.gateway_monitor.time.sleep")
     def test_restart_sends_telegram_notification(self, mock_sleep, mock_conn_cls):
         """Successful restart sends a Telegram alert."""
-        mock_response = MagicMock()
-        mock_response.status = 204
-        mock_response.read.return_value = b""
-
         mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_response
         mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn)
 
         notifier = MagicMock()
         notifier.enabled = True
@@ -131,13 +147,9 @@ class TestGatewayMonitor:
     @patch("src.gateway_monitor.time.sleep")
     def test_daily_counter_resets_on_new_day(self, mock_sleep, mock_conn_cls):
         """Counter resets when date changes."""
-        mock_response = MagicMock()
-        mock_response.status = 204
-        mock_response.read.return_value = b""
-
         mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_response
         mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn)
 
         monitor = self._make_monitor()
         monitor.restart_gateway()
@@ -146,6 +158,75 @@ class TestGatewayMonitor:
         # Simulate date change
         monitor._restart_date = date(2020, 1, 1)
         assert monitor.restarts_today == 0
+
+    # ---- mid-login guard (86ae98a) ------------------------------------
+
+    @patch("src.gateway_monitor.UnixHTTPConnection")
+    @patch("src.gateway_monitor.time.sleep")
+    def test_restart_skipped_while_2fa_dialog_open(self, mock_sleep, mock_conn_cls):
+        """IBC login markers in the gateway log -> no restart, cap untouched.
+
+        Replays the 2026-08-17 incident: restarting a gateway that is waiting
+        on a 2FA push kills the push the user is trying to approve.
+        """
+        mock_conn = MagicMock()
+        mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn, logs=(
+            b"IBC: detected dialog entitled: Second Factor Authentication; "
+            b"event=Opened"
+        ))
+
+        notifier = MagicMock()
+        notifier.enabled = True
+        monitor = self._make_monitor(notifier=notifier)
+
+        result = monitor.restart_gateway()
+
+        assert result is False
+        assert monitor.restarts_today == 0  # daily cap NOT consumed
+        posts = [c for c in mock_conn.request.call_args_list
+                 if c[0][0] == "POST"]
+        assert posts == []  # container never restarted
+        notifier.notify_error.assert_called_once()
+        assert "approve" in notifier.notify_error.call_args[0][0].lower()
+
+    @patch("src.gateway_monitor.UnixHTTPConnection")
+    @patch("src.gateway_monitor.time.sleep")
+    def test_restart_skipped_while_container_booting(self, mock_sleep, mock_conn_cls):
+        """A container younger than FRESH_START_GRACE is still logging in."""
+        just_started = (
+            datetime.now(timezone.utc) - timedelta(seconds=30)
+        ).strftime("%Y-%m-%dT%H:%M:%S.000000000Z")
+
+        mock_conn = MagicMock()
+        mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn, started=just_started)
+
+        monitor = self._make_monitor()
+        result = monitor.restart_gateway()
+
+        assert result is False
+        assert monitor.restarts_today == 0
+        posts = [c for c in mock_conn.request.call_args_list
+                 if c[0][0] == "POST"]
+        assert posts == []
+
+    @patch("src.gateway_monitor.UnixHTTPConnection")
+    @patch("src.gateway_monitor.time.sleep")
+    def test_2fa_nag_is_rate_limited(self, mock_sleep, mock_conn_cls):
+        """A 5-min probe loop must not spam Telegram: one nag per 15 min."""
+        mock_conn = MagicMock()
+        mock_conn_cls.return_value = mock_conn
+        _wire_docker(mock_conn, logs=b"IBC: Login attempt: 3")
+
+        notifier = MagicMock()
+        notifier.enabled = True
+        monitor = self._make_monitor(notifier=notifier)
+
+        assert monitor.restart_gateway() is False
+        assert monitor.restart_gateway() is False
+
+        notifier.notify_error.assert_called_once()
 
 
 # ============================================================

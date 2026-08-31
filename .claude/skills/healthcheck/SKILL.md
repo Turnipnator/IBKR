@@ -13,8 +13,23 @@ Run a comprehensive health check on the IBKR trading bot. Work through each sect
 - Containers: ib-gateway, trading-bot
 - Path: /root/IBKR_Bot
 
-> Note: a third container `ig-trading-bot` may also be running on this VPS — that
-> is a **separate Hyperliquid bot**, not part of this project. Ignore it here.
+> Note: other containers (`ig-trading-bot`, `betfair-bot`, `horse-racing-bot`, …)
+> also run on this VPS — those are **separate bots**, not part of this project.
+> Ignore them here.
+
+> **Log-source rule** (memory `bot-log-persistence`): `docker logs trading-bot`
+> only spans the **current container** — after a rebuild it starts empty, so
+> greps for rebalances/parity/P&L come back blank and look like failures.
+> Persistent history lives in `/root/IBKR_Bot/logs/trading.log` (back to
+> Jan 2026). Use `docker logs` only for "what happened since the last deploy"
+> (e.g. startup lines); use `logs/trading.log` for everything else.
+
+> **Calendar rule**: rebalances and risk checks are gated on LSE market days.
+> On weekends and UK bank holidays, "no rebalance today" and "last risk check
+> was Friday" are normal, not failures. The weekly IBC gateway restart fires
+> **Sunday 23:55 UTC and needs manual 2FA** (no TOTP key) — on a Monday-morning
+> check, verify the gateway re-login completed:
+> `docker logs ib-gateway --since 40h 2>&1 | grep -iE 'second factor|Login has completed' | tail -5`
 
 ## 1. PROCESS STATUS
 - Are both containers running? (ib-gateway, trading-bot)
@@ -24,7 +39,7 @@ Run a comprehensive health check on the IBKR trading bot. Work through each sect
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'ib-gateway|trading-bot'"
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep 'Intraday risk check' | tail -1"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep 'Intraday risk check' /root/IBKR_Bot/logs/trading.log | tail -2"
 ```
 
 ## 2. LOG ANALYSIS
@@ -43,20 +58,25 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot --sin
 - How many instruments were analyzed?
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep -E 'DAILY REBALANCE|Analysis complete|Rebalance:' | tail -10"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep -E 'DAILY REBALANCE|Analysis complete' /root/IBKR_Bot/logs/trading.log | tail -10"
 ```
 
-## 4. SCREENER & WATCHLIST  *(retired)*
+## 4. SCREENER (retired) & WATCHLIST (live universe)
 
-The screener container and `data/watchlist.json` were retired when the bot
-migrated to the fixed UCITS-on-LSE universe — the screener still pointed at the
-old US universe and would clobber the watchlist (Error 201; see memory
-`project_screener_us_landmine`). There is no `screener` container and
-`watchlist.json` is orphaned, so there is nothing to check here.
+The **screener** container was retired when the bot migrated to the fixed
+UCITS-on-LSE universe — it still pointed at the old US universe and would
+clobber the watchlist (Error 201; see memory `project_screener_us_landmine`).
+There is no `screener` container; nothing to check there.
 
-Live signals for the full fixed universe are recorded in the `instrument_signals`
-DB table — **section 5 below covers what this section used to**, sourced directly
-from the engine rather than the dead watchlist file.
+`data/watchlist.json` however **is live** — it defines the trading universe the
+engine loads at startup (24 names since IJPN was re-added 2026-08-28, commit
+f5208d3). Sanity: the symbol count in the file should match the per-day
+instrument count in section 5's signals query (universe changes only apply
+after a bot restart).
+
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "python3 -c \"import json; s=json.load(open('/root/IBKR_Bot/data/watchlist.json'))['symbols']; print({k: len(v) for k,v in s.items()}, sum(len(v) for v in s.values()), 'total')\""
+```
 
 ## 5. INSTRUMENT SIGNALS
 - Check the latest TSMOM/CSMOM signals from the database
@@ -69,56 +89,50 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 
 
 ## 6. OPEN POSITIONS & TRAILING-STOP HEALTH
 
-This single query gives you the full picture for each open position:
-- `entry`, `best`, `price`, `stored_stop` — the live numbers
-- `expected_stop` — what the trail SHOULD be right now (`best − 3×ATR` for longs, `best + 3×ATR` for shorts), using the most recent ATR from `instrument_signals`
-- `gap` — how far behind the stored stop is vs expected; should be ~0 if the ratchet is healthy
-- `pct_buffer` — % distance from current price to stop (smaller = closer to stopping out)
-- `trail_status` — `OK` / `STALE` (gap > 1% of entry, indicating the ratchet hasn't fired) / `?` (no recent ATR signal)
-
-**Action**: any `STALE` row means the trailing-stop ratchet is broken — investigate the risk-check logs for that symbol immediately. This is the check that would have caught the May 2026 incident where all 8 stops sat at entry-day initial values for 9 days.
+> **Do NOT use `paper_trades` for this in LIVE mode** — that table belongs to
+> the retired paper/scalping era and was wiped at the 2026-05-22 cutover; a
+> query against it silently returns zero rows and proves nothing. In LIVE the
+> source of truth is IBKR itself: positions + working GTC stops via a
+> **read-only probe** (`/root/probe3.py`, clientId 17, `readonly=True` — never
+> clientId 1, that's the bot's).
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 -header -column data/trading.db \"
-WITH latest_signals AS (
-  SELECT symbol, atr_value, price AS latest_price
-  FROM instrument_signals
-  WHERE signal_date = (SELECT MAX(signal_date) FROM instrument_signals)
-)
-SELECT
-  p.id,
-  p.symbol,
-  p.action,
-  ROUND(p.entry_price, 2) AS entry,
-  ROUND(p.best_price, 2) AS best,
-  ROUND(s.latest_price, 2) AS price,
-  ROUND(p.stop_loss, 2) AS stored_stop,
-  ROUND(CASE WHEN p.action='BUY' THEN p.best_price - 3*s.atr_value ELSE p.best_price + 3*s.atr_value END, 2) AS expected_stop,
-  ROUND(CASE WHEN p.action='BUY' THEN (p.best_price - 3*s.atr_value) - p.stop_loss ELSE p.stop_loss - (p.best_price + 3*s.atr_value) END, 2) AS gap,
-  ROUND(CASE WHEN p.action='BUY' THEN (s.latest_price - p.stop_loss)/s.latest_price*100 ELSE (p.stop_loss - s.latest_price)/s.latest_price*100 END, 1) AS pct_buffer,
-  CASE
-    WHEN s.atr_value IS NULL THEN '?'
-    WHEN p.action='BUY'  AND (p.best_price - 3*s.atr_value) > p.stop_loss + (p.entry_price * 0.01) THEN 'STALE'
-    WHEN p.action='SELL' AND (p.best_price + 3*s.atr_value) < p.stop_loss - (p.entry_price * 0.01) THEN 'STALE'
-    ELSE 'OK'
-  END AS trail_status,
-  p.min_exit_date
-FROM paper_trades p
-LEFT JOIN latest_signals s ON p.symbol = s.symbol
-WHERE p.status = 'OPEN'
-ORDER BY p.id;
-\""
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker run --rm --network container:ib-gateway -v /root/probe3.py:/probe.py:ro ibkr_bot-trading-bot:latest python /probe.py 2>&1 | grep -vE '^(Error|Warning) '"
 ```
+
+The probe prints, per working stop, `STOP <sym> SELL <qty> TRAIL trailStop=<trigger>`,
+then per position `held == covered` (`OK` / `GAP`), then totals + NLV. Read it as:
+
+- **Coverage**: every `POS` row must be `OK` (held == covered by working stops)
+  with `total_gap=0` and `orphans=[]`. A GAP is a naked position — the bot's
+  reconcile should heal it; investigate immediately if it persists.
+- **Ratchet sanity**: for each held symbol compare `trailStop` against
+  `price − 3×ATR` from the latest `instrument_signals` row (section 5). The
+  trigger should sit within ~1–2% of that level (it ratchets off intraday highs
+  server-side, so small differences vs the close-based figure are normal). A
+  trigger far BELOW it means the ratchet is broken — this is the check that
+  would have caught the May 2026 incident where all 8 stops sat at entry-day
+  initial values for 9 days.
+- **Buffer**: `(price − trailStop)/price` per name — small % = close to
+  stopping out (worth mentioning, not a fault).
+- Stops are **server-side GTC** — they survive bot restarts and fire with the
+  bot down; a firing stop shows up via the `commissionReportEvent` fill
+  notifier (section 7).
 
 ## 7. ORDER PARITY (live-mode)
 
 Every live position must have a working TRAIL/STP order, and every working stop must back a held position. The bot heals naked positions automatically (via the startup-reconcile reused at every risk check) and alerts on orphan stops.
 
 - In DRY_RUN: parity is `n/a` — the bot doesn't place IBKR orders.
-- In LIVE: any `healed` count > 0 means the bot recovered from a crash mid-rebalance; any `orphans` row means a stop exists for a symbol you're not holding (manual closure, stale order, etc.).
+- In LIVE: any `healed` count > 0 means a BUY filled after the 5s wait window (entry-race deferral) or the bot crashed mid-rebalance; any `orphans` row means a stop exists for a symbol you're not holding (manual closure, stale order, etc.).
+- Parity is **quantity-aware** since 420d520 (covered shares, not just "a stop exists").
+- The **post-rebalance stop sweep** logs `Post-rebalance stop sweep (+Ns): N stop(s) placed` after any rebalance with executions — "0 placed" twice is the healthy case.
+- Startup must show `Subscribed to commissionReportEvent for LIVE fill alerts` (the stop-fill notifier — without it stops fire silently).
+- On any **top-up**, a `protective stop replaced` line should be preceded by `keeping ratcheted trigger …` whenever the fresh 3×ATR level would have lowered the stop (ratchet-preserving swap, f5208d3).
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep -E 'Order-parity:|Orphan protective' | tail -5"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep -E 'Order-parity:|Orphan protective|stop sweep|keeping ratcheted trigger' /root/IBKR_Bot/logs/trading.log | tail -8"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep 'commissionReportEvent' | head -1"
 ```
 
 ## 8. NLV RECONCILIATION (live-mode)
@@ -128,19 +142,19 @@ Compares IBKR's live `NetLiquidation` against the most recent `portfolio_snapsho
 - In DRY_RUN: still useful — paper account's NLV should track the equity snapshot the engine saves each rebalance.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep 'NLV reconcile' | tail -5"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep 'NLV reconcile' /root/IBKR_Bot/logs/trading.log | tail -5"
 ```
 
 ## 9. DAILY-LOSS HALT
 
-Tracks today's realized + unrealized P&L. If `session_pnl <= -max_daily_loss` (see `max_daily_loss` in `src/config.py`; currently −£101, hardcoded for £2.5k capital), new entries are blocked for the rest of the day (existing positions remain — trail-stops still active). Auto-clears at midnight.
+Tracks today's realized + unrealized P&L. If `session_pnl <= -max_daily_loss` (read the current value from `max_daily_loss` in `src/config.py` — £200 since the £5k step-up, commit 641ee96), new entries are blocked for the rest of the day (existing positions remain — trail-stops still active). Auto-clears at midnight.
 
 - The `Daily P&L:` log line fires at every risk check and at every rebalance — you'll always see today's running number.
 - `DAILY LOSS HALT` only fires once per day on first breach (Telegram alert).
 - `Skipped: daily-loss halt active` lines confirm the gate worked.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 | grep -E 'Daily P&L:|DAILY LOSS HALT|daily-loss halt' | tail -10"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep -E 'Daily P&L:|DAILY LOSS HALT|daily-loss halt' /root/IBKR_Bot/logs/trading.log | tail -10"
 ```
 
 ## 10. PORTFOLIO & DRAWDOWN
@@ -152,14 +166,24 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker logs trading-bot 2>&1 
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 data/trading.db 'SELECT equity, drawdown, peak_equity, created_at FROM portfolio_snapshots ORDER BY id DESC LIMIT 5;'"
 ```
 
-## 11. PERFORMANCE METRICS
-- Overall paper trade stats (wins, losses, P&L)
-- Average win vs average loss size
-- Separate old scalping-era trades from new trend-following trades if possible
+## 11. PERFORMANCE METRICS (live tape)
+
+> `paper_trades` is dead in LIVE mode (see section 6). The live closed-trade
+> tape is the `Protective stop FILLED` lines in `logs/trading.log` — each
+> carries IBKR's own `realizedPnL` and `commission` (account-base GBP,
+> written by the `commissionReportEvent` notifier since fbff002). Note: a fill
+> occasionally logs twice (one line per commission report on partial fills) —
+> dedupe by orderId when counting.
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 data/trading.db \"SELECT COUNT(*) as total, SUM(CASE WHEN status != 'OPEN' AND pnl_amount > 0 THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN status != 'OPEN' AND pnl_amount <= 0 THEN 1 ELSE 0 END) as losses, SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) as open_now, ROUND(COALESCE(SUM(CASE WHEN status != 'OPEN' THEN pnl_amount END), 0), 2) as total_pnl, ROUND(AVG(CASE WHEN status != 'OPEN' AND pnl_amount > 0 THEN pnl_amount END), 2) as avg_win, ROUND(AVG(CASE WHEN status != 'OPEN' AND pnl_amount < 0 THEN pnl_amount END), 2) as avg_loss FROM paper_trades;\""
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep 'Protective stop FILLED' /root/IBKR_Bot/logs/trading.log | tail -15"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 -header data/trading.db 'SELECT status, COUNT(*) FROM trades GROUP BY status;'"
 ```
+
+Assess: win count vs loss count, avg win vs avg loss (payoff ratio), and
+**commission as % of the average risk unit** — at this account size fee drag,
+not signal quality, has been the dominant cost (memory
+`commission-drag-small-capital`); check fee-to-risk before blaming signals.
 
 ## 12. SYSTEM RESOURCES
 - RAM usage, disk space
@@ -168,7 +192,34 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "free -h | head -3 && echo '---' && df -h / | tail -1"
 ```
 
-## 13. NETWORK SECURITY
+## 13. DEPLOY PARITY
+
+Deploy flow is commit → `git push` → VPS `git pull` → bot-only rebuild (memory
+`github-push-works-deploy-via-pull`). Verify the three copies agree:
+
+- **VPS tree** — clean and on the same commit as local/origin. (Known benign
+  untracked files on the VPS: `.env.pre-*` backups, `data/backups/`,
+  `data/trading.db.pre-*` — ignore those; anything else is drift.)
+- **Running image** — built at/after the latest commit (a pulled-but-not-rebuilt
+  bot silently runs old code).
+
+```bash
+git log --oneline -1
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && git log --oneline -1 && git status --porcelain | grep -vE '^\?\? (\.env\.pre-|data/)' ; docker inspect --format 'image built: {{.Created}}' ibkr_bot-trading-bot:latest ; docker inspect --format 'bot started: {{.State.StartedAt}}' trading-bot"
+```
+
+**Optional (after test changes or when suspicious): run the in-image suite** —
+the local Mac venv is Python 3.14 where `ib_insync` fails to import; tests only
+run in-image:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker run --rm --user root -v /root/IBKR_Bot/tests:/app/tests:ro ibkr_bot-trading-bot:latest sh -c 'pip install -q pytest 2>/dev/null; cd /app && python -m pytest tests -q 2>&1 | tail -3'"
+```
+
+Expected: **all passing** (106 as of 2026-08-31). Any failure is a regression —
+there is no longer a known-bad set to ignore.
+
+## 14. NETWORK SECURITY
 
 Verify the VPS firewall is in place. Locked down on 2026-05-13 after finding VNC (5900), IBKR Gateway API (4001), and socat (4003) all publicly listening with default-password VNC. Only port 22 (SSH) should be allowed inbound.
 
@@ -189,37 +240,41 @@ done
 nc -z -w 3 149.102.144.190 22 && echo "22 OPEN (good)" || echo "22 BLOCKED (BAD)"
 ```
 
-## 14. STRATEGY ASSESSMENT
-Based on the data gathered above, assess:
+## 15. STRATEGY ASSESSMENT
+Read the current parameters from `src/config.py` first (slots, per-name cap,
+class cap, ATR multiplier, vol floor, cooldown — they change; don't assess
+against remembered values). Then assess:
 - Are the TSMOM/CSMOM signals diverse across asset classes? (not concentrated)
-- Is the trailing stop (3x ATR) appropriate for current volatility?
-- Are position sizes reasonable given the volatility-scaling?
+- Is the trailing stop appropriate for current volatility?
+- Are position sizes reasonable — and what is commission as % of risk-to-stop?
 - Is the drawdown within acceptable limits?
-- Any parameter tweaks recommended?
+- Any parameter tweaks recommended? (Parameter changes are the user's call —
+  recommend, don't apply.)
 
-## 15. RECOMMENDATIONS
+## 16. RECOMMENDATIONS
 Provide prioritised recommendations:
 - P1 (Critical): Issues that need immediate attention
 - P2 (Important): Should be addressed soon
 - P3 (Nice to have): Optimisations for later
 
-## 16. SUMMARY DASHBOARD
+## 17. SUMMARY DASHBOARD
 Present a quick status summary table:
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| IB Gateway | | |
+| IB Gateway | | (uptime + login state; Mondays: did the Sunday 23:55 2FA complete?) |
 | Trading Bot | | |
-| Signals | | (instruments recorded today + concentration) |
+| Signals | | (instruments recorded on last market day + concentration) |
 | Rebalance | | |
-| Last Risk Check | | (timestamp + age) |
-| Open Positions | | |
-| **Trailing Stops** | | (count of OK / STALE / ?) |
+| Last Risk Check | | (timestamp + age, vs market calendar) |
+| Open Positions | | (probe: N positions, held == covered) |
+| **Trailing Stops** | | (probe coverage gap + ratchet sanity vs price−3×ATR) |
 | **Order Parity** | | (OK / healed N / N orphans / n/a) |
 | **NLV Drift** | | (% drift from last snapshot) |
 | **Daily Loss** | | (today's session P&L / halt state) |
 | Drawdown | | |
 | Logs (errors 24h) | | (count after gateway-reconnect filter) |
+| **Deploy Parity** | | (local == origin == VPS == running image; tests green) |
 | Resources | | |
 | **Firewall (ufw)** | | (active + only 22 allowed / or flag) |
 | Strategy Edge | | |
