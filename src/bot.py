@@ -609,9 +609,18 @@ class TradingBot:
                             )
                         )
                     else:
+                        # The engine may have trimmed the BUY to settled
+                        # cash, so target-held can overstate the resting
+                        # order (claimed "+13" for a 3-share BUY, 2026-09-01).
+                        # The Trade carries the quantity actually placed.
+                        placed = (
+                            int(result.trade.order.totalQuantity)
+                            if result.trade is not None
+                            else target - held
+                        )
                         logger.info(
                             f"  → Top-up BUY placed for {opp.symbol} "
-                            f"(+{target - held}) but not yet filled — "
+                            f"(+{placed}) but not yet filled — "
                             f"cover extends on reconcile"
                         )
                 else:

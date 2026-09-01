@@ -13,6 +13,7 @@ connection and reconcile are stubs. `ib.sleep` is a no-op so the 30/90s waits
 don't actually happen.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -148,6 +149,30 @@ class TestBehaviourPreserved:
         bot._execute_live([_opp("AIGS", size=10)], results)
         assert results["trades_executed"] == 1
         assert bot._reconcile_protective_stops.call_count == 2
+
+    def test_unfilled_top_up_logs_the_actual_placed_quantity(self, caplog):
+        """Replays 2026-09-01: the top-up BUY was trimmed to settled cash
+        (3 of the 13-share shortfall) but the unfilled line claimed "(+13)".
+        It must report the order actually resting on the book — the
+        quantity on the Trade — not the untrimmed target-held arithmetic."""
+        trade = SimpleNamespace(order=SimpleNamespace(totalQuantity=3.0))
+        top_up = MagicMock(return_value=OrderResult(
+            success=True, order_id=2, filled_quantity=0, trade=trade))
+        bot = _bot(held={"CMOD": 23}, top_up=top_up)
+        with caplog.at_level(logging.INFO, logger="src.bot"):
+            bot._execute_live([_opp("CMOD", size=36)], _results())
+        assert "Top-up BUY placed for CMOD (+3) but not yet filled" in caplog.text
+        assert "(+13)" not in caplog.text
+
+    def test_unfilled_top_up_without_trade_falls_back_to_shortfall(self, caplog):
+        """No Trade attached (mock/edge path): fall back to target-held
+        rather than crash — the old behaviour, now only the last resort."""
+        top_up = MagicMock(return_value=OrderResult(
+            success=True, order_id=2, filled_quantity=0))
+        bot = _bot(held={"AIGS": 2}, top_up=top_up)
+        with caplog.at_level(logging.INFO, logger="src.bot"):
+            bot._execute_live([_opp("AIGS", size=10)], _results())
+        assert "Top-up BUY placed for AIGS (+8) but not yet filled" in caplog.text
 
     def test_pending_mkt_entry_is_deduped(self):
         execute = MagicMock()
