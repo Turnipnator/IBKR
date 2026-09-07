@@ -1235,6 +1235,27 @@ class TradingBot:
         if failures < threshold_failures:
             return
 
+        # A 2FA wait is not a wedged gateway: IBC keeps the login alive and
+        # the probe keeps failing until a human approves, so sys.exit(1) here
+        # only crash-loops the bot against a gateway that cannot come up yet
+        # (29 restarts on 2026-09-07). Same guard as check_and_heal(); the
+        # guard clears 30 quiet minutes after the dialog closes, so a truly
+        # wedged gateway still trips the watchdog.
+        try:
+            login_check = getattr(
+                getattr(self.data_health, "gateway_monitor", None),
+                "login_in_progress", None)
+            reason = login_check() if callable(login_check) else None
+        except Exception as e:
+            logger.warning(f"Watchdog: 2FA-guard check failed (fail-open): {e}")
+            reason = None
+        if reason:
+            logger.warning(
+                f"Watchdog: probe failed {failures}x but gateway is mid-login "
+                f"({reason}) — holding off self-restart until 2FA resolves"
+            )
+            return
+
         last_success = self.data_health.time_since_last_success()
         last_success_str = (
             f"{last_success.total_seconds()/60:.0f} min ago"
