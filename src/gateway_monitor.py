@@ -33,9 +33,32 @@ POST_RESTART_WAIT = 60  # seconds to wait after restart before reconnecting
 # started, skip the restart, don't count it against the daily cap, and tell the
 # user to approve the push instead (rate-limited so a 5-min probe loop doesn't
 # spam Telegram).
-LOGIN_ACTIVITY_WINDOW = 300      # seconds of gateway log to inspect
+#
+# Blind spot found 2026-09-07 (99 login attempts / 42 pushes overnight, guard
+# skipped 10 restarts but let two through at 07:18:47 and 07:34:27): once IBC
+# has opened the 2FA dialog it logs NOTHING until the dialog times out, which
+# takes 4-15 minutes. The "event=Opened" line at 07:13:43 fell 4 s outside the
+# 300 s window, so the guard saw an empty log and let the restart kill a push
+# that was still live. Recency of *any* marker is the wrong question while a
+# dialog is open; the right one is state: "is the most recent 2FA dialog still
+# on screen?" — answered over a longer TWOFA_DIALOG_LOOKBACK window by checking
+# that the last "event=Opened" has no later Closed / Login has completed / IBC
+# restart after it. The lookback caps how long silence counts as "waiting":
+# after 30 quiet minutes (2x the longest observed wait) a restart is allowed.
+LOGIN_ACTIVITY_WINDOW = 300      # any IBC login marker this recent = login in progress
+TWOFA_DIALOG_LOOKBACK = 1800     # how far back an OPEN 2FA dialog still counts
 FRESH_START_GRACE = 180          # container younger than this = still booting/logging in
 TWOFA_NOTIFY_INTERVAL = 900      # at most one "approve 2FA" nag per 15 min
+TWOFA_OPENED = "Second Factor Authentication; event=Opened"
+TWOFA_CLOSED = "Second Factor Authentication; event=Closed"
+# Any of these AFTER the last TWOFA_OPENED means that dialog is no longer on
+# screen (timed out / approved / IBC exited with 1111 and restarted).
+TWOFA_TERMINATORS = (
+    TWOFA_CLOSED,
+    "Login has completed",
+    "Exiting with exit code",
+    "Starting session",
+)
 LOGIN_MARKERS = (
     "Second Factor Authentication",           # dialog Opened/Closed, "initiated"
     "Re-login after second factor",           # IBC re-login after push timeout
@@ -109,6 +132,22 @@ class GatewayMonitor:
         started_dt = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - started_dt).total_seconds()
 
+    @staticmethod
+    def _twofa_dialog_open(log: str) -> bool:
+        """True if the most recent 2FA dialog in `log` is still on screen.
+
+        Pure string-position logic over the raw Docker log body: the last
+        "event=Opened" must not be followed by any terminator (Closed, login
+        completed, IBC exit/restart). IBC flickers a dialog open/closed within
+        milliseconds when IBKR refuses to push (seen 07:39:27 on 2026-09-07);
+        that correctly reads as *not* open and falls through to the recency
+        check, which still sees the markers.
+        """
+        opened = log.rfind(TWOFA_OPENED)
+        if opened < 0:
+            return False
+        return all(log.rfind(t) < opened for t in TWOFA_TERMINATORS)
+
     def login_in_progress(self) -> str | None:
         """Return a reason string if the gateway is booting or mid-login/2FA,
         else None. Never raises — on any Docker/parse error returns None so
@@ -118,14 +157,21 @@ class GatewayMonitor:
             uptime = self._gateway_uptime_s()
             if uptime is not None and uptime < FRESH_START_GRACE:
                 return f"gateway container started {uptime:.0f}s ago (still booting)"
-            log = self._gateway_recent_log(LOGIN_ACTIVITY_WINDOW)
-            hits = [m for m in LOGIN_MARKERS if m in log]
+            recent = self._gateway_recent_log(LOGIN_ACTIVITY_WINDOW)
+            # Be specific when we can: an OPEN 2FA dialog is the case that
+            # matters most to the user.
+            if self._twofa_dialog_open(recent):
+                return "2FA push outstanding (dialog open)"
+            hits = [m for m in LOGIN_MARKERS if m in recent]
             if hits:
-                # Be specific when we can: an OPEN 2FA dialog is the case that
-                # matters most to the user.
-                if "Second Factor Authentication; event=Opened" in log:
-                    return "2FA push outstanding (dialog open)"
                 return f"login in progress ({hits[0]!r} in last {LOGIN_ACTIVITY_WINDOW}s)"
+            # Quiet for 5 min is NOT proof of a wedged gateway: IBC is silent
+            # while a 2FA dialog waits for the user (2026-09-07 blind spot).
+            if self._twofa_dialog_open(self._gateway_recent_log(TWOFA_DIALOG_LOOKBACK)):
+                return (
+                    f"2FA push outstanding (dialog opened >{LOGIN_ACTIVITY_WINDOW}s ago "
+                    f"and still open — IBC logs nothing while it waits)"
+                )
             return None
         except Exception as e:
             logger.debug(f"login_in_progress check failed (fail-open): {e}")
@@ -141,7 +187,7 @@ class GatewayMonitor:
             f"Gateway restart SKIPPED — {reason}.\n\n"
             f"The gateway is alive and mid-login; restarting it would only kill "
             f"the outstanding 2FA push. Please approve the login on IBKR Mobile "
-            f"(a fresh push is re-sent every ~3.5 min until you do).",
+            f"(IBC re-sends a push every few minutes — typically 5-15 — until you do).",
             critical=True,
         )
 
