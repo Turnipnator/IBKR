@@ -129,6 +129,7 @@ Every live position must have a working TRAIL/STP order, and every working stop 
 - The **post-rebalance stop sweep** logs `Post-rebalance stop sweep (+Ns): N stop(s) placed` after any rebalance with executions — "0 placed" twice is the healthy case.
 - Startup must show `Subscribed to commissionReportEvent for LIVE fill alerts` (the stop-fill notifier — without it stops fire silently).
 - On any **top-up**, a `protective stop replaced` line should be preceded by `keeping ratcheted trigger …` whenever the fresh 3×ATR level would have lowered the stop (ratchet-preserving swap, f5208d3).
+- A `top-up skipped (floor 1xATR)` line is the **stop-buffer gate** (2026-09-11): the name wanted a top-up but sits within 1×ATR of the stop it would carry — expected, not a fault. A `below 50% top-up floor` line is the cash-trimmed top-up floor (same day).
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep -E 'Order-parity:|Orphan protective|stop sweep|keeping ratcheted trigger' /root/IBKR_Bot/logs/trading.log | tail -8"

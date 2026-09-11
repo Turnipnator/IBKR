@@ -689,9 +689,12 @@ class DecisionEngine:
         price cushion (both are what pushed the 08-17/18 EIMU orders £31/£37 over
         the line). A trimmed NEW entry smaller than ``min_partial_entry_pct`` of
         target is skipped — the $4 minimum commission makes tiny lots pointless
-        and the top-up path will size it properly once proceeds settle. Top-ups
-        have no floor: any extra cover is a strict improvement and the caller
-        already gated on the 30% drift threshold.
+        and the top-up path will size it properly once proceeds settle. A
+        trimmed TOP-UP smaller than ``min_partial_topup_pct`` of the wanted
+        delta is skipped for the same reason: on 2026-08-31 a 13-share CMOD
+        top-up trimmed to 3 shares paid the $4 minimum on ~$100 of stock. (The
+        caller already gated on the 30% drift threshold, so the untrimmed
+        delta is never tiny — only a cash-starved one is.)
         """
         if quantity <= 0 or price <= 0:
             return 0
@@ -719,12 +722,17 @@ class DecisionEngine:
             )
             return 0
         frac = affordable / quantity
-        if is_new_entry and frac < self.config.min_partial_entry_pct:
+        kind = "entry" if is_new_entry else "top-up"
+        floor = (
+            self.config.min_partial_entry_pct
+            if is_new_entry
+            else float(getattr(self.config, "min_partial_topup_pct", 0.0) or 0.0)
+        )
+        if floor > 0 and frac < floor:
             logger.info(
                 f"  {symbol}: settled cash {base_sym}{settled:,.2f} covers only "
                 f"{affordable}/{quantity} shares ({frac:.0%}, below "
-                f"{self.config.min_partial_entry_pct:.0%} floor) — skipping "
-                f"until proceeds settle"
+                f"{floor:.0%} {kind} floor) — skipping until proceeds settle"
             )
             return 0
         logger.info(
@@ -890,8 +898,16 @@ class DecisionEngine:
                 success=True, message=f"[DRY RUN] top-up {opportunity.symbol}"
             )
 
+        # Don't buy more of a name that is about to stop out: the added shares
+        # would carry almost no distance to the (kept) ratchet, so a stop-out
+        # turns the whole top-up into commission. Checked before the settled-
+        # cash read so a skip costs nothing.
+        gate = self._topup_stop_buffer_ok(opportunity)
+        if gate is not None:
+            return OrderResult(success=False, message=gate)
+
         # Cash account: buy what settled cash covers rather than have IBKR
-        # reject the whole top-up. Any partial cover is a strict improvement.
+        # reject the whole top-up (subject to the min_partial_topup_pct floor).
         delta = self._affordable_quantity(
             opportunity.symbol, delta, opportunity.current_price, is_new_entry=False
         )
@@ -967,6 +983,65 @@ class DecisionEngine:
             reason=f"Top-up: re-cover full position of {target}",
         )
         return result
+
+    def _topup_stop_buffer_ok(self, opportunity: TradeOpportunity):
+        """Top-up buffer gate. Returns None when the top-up may proceed, or the
+        skip reason (str) when the name sits within ``topup_min_stop_buffer_atr``
+        ATRs of the stop it will actually carry after the swap.
+
+        Why: a falling price RAISES the share target, so a position drifting
+        down toward its own ratcheted stop is exactly when it crosses the 30%
+        drift line — AIGA on 2026-09-11 sat at 70.4% of target and 1.2% above
+        its 7.05 ratchet. Because the swap keeps the ratchet (f5208d3) the
+        added shares would carry ~$0.04 of risk each against a $4 commission;
+        a stop-out minutes later turns the whole top-up into fee.
+
+        The stop the position will carry is max(ratcheted trigger, fresh
+        price-3xATR level) — the same rule ``replace_trailing_stop`` applies.
+        Fail-open: no ATR, no readable stops, or an IBKR error lets the old
+        path run (logged) — a wrongly-skipped top-up retries tomorrow, a
+        wrongly-allowed one costs $4; neither is worth a hard failure.
+        """
+        min_mult = float(getattr(self.config, "topup_min_stop_buffer_atr", 0.0) or 0.0)
+        if min_mult <= 0:
+            return None
+        symbol = opportunity.symbol
+        atr = float(opportunity.atr_value or 0.0)
+        price = float(opportunity.current_price or 0.0)
+        if atr <= 0 or price <= 0:
+            logger.warning(
+                f"{symbol}: cannot judge the stop buffer (price={price}, ATR={atr}) "
+                f"— top-up gate not applied"
+            )
+            return None
+        try:
+            stops = self.order_manager.protective_stops_for(symbol, OrderAction.SELL.value)
+            ratchet = OrderManager._ratcheted_trigger(stops, OrderAction.SELL)
+        except Exception as e:  # fail-open, same as the settled-cash read
+            logger.warning(
+                f"{symbol}: could not read working stops for the top-up gate "
+                f"({e}) — top-up gate not applied"
+            )
+            return None
+        levels = [float(v) for v in (ratchet, opportunity.stop_loss_price) if v]
+        if not levels:
+            return None  # naked and no fresh level — reconcile's job, not a reason to skip
+        carried_stop = max(levels)
+        buffer = price - carried_stop
+        required = min_mult * atr
+        if buffer + 1e-9 < required:
+            logger.info(
+                f"  {symbol}: price {price:.3f} is only {buffer:.3f} "
+                f"({buffer / atr:.2f}xATR, {buffer / price:.1%}) above the "
+                f"{carried_stop:.3f} stop it would carry — top-up skipped "
+                f"(floor {min_mult:g}xATR); a stop-out would turn the added "
+                f"shares into pure commission"
+            )
+            return (
+                f"Skipped: only {buffer / atr:.2f}xATR above the {carried_stop:.3f} "
+                f"stop (floor {min_mult:g}xATR)"
+            )
+        return None
 
     def get_status_report(self) -> str:
         """Generate a status report of current state."""

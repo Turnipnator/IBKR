@@ -187,6 +187,20 @@ class TradingConfig:
     # the top-up path will fill it properly once cash settles.
     settled_cash_buffer: float = 0.06
     min_partial_entry_pct: float = 0.50
+    # Same floor for a cash-trimmed TOP-UP, as a fraction of the wanted delta.
+    # Top-ups had no floor ("any extra cover is a strict improvement"), so on
+    # 2026-08-31 a 13-share CMOD top-up trimmed to 3 shares paid the $4
+    # minimum commission on ~$100 of stock. 0 disables.
+    min_partial_topup_pct: float = 0.50
+    # Never top up a name sitting within this many ATRs of the stop it will
+    # carry after the swap (max of the ratcheted trigger and the fresh
+    # price-3xATR level — the rule replace_trailing_stop applies). A falling
+    # price RAISES the share target, so a name drifting down toward its own
+    # stop is exactly when it crosses the drift line: AIGA on 2026-09-11 sat
+    # at 70.4% of target and 1.2% (0.8xATR) above its 7.05 ratchet — the added
+    # shares would have carried ~$0.04 of risk each against a $4 commission,
+    # and a stop-out minutes later turns the whole top-up into fee. 0 disables.
+    topup_min_stop_buffer_atr: float = 1.0
     drawdown_reduce_pct: float = 0.10  # Reduce positions 50% at 10% drawdown
     drawdown_halt_pct: float = 0.20    # Close all + halt at 20% drawdown
     max_daily_loss: float = 200.0      # Daily loss limit, base GBP (~4% of £5k NLV). HARDCODED — the only risk limit that does NOT auto-scale off NLV; re-bump if capital changes.

@@ -196,5 +196,9 @@ class TestAffordability:
         assert eng._affordable_quantity("EQQQ", 2, 53308.0, is_new_entry=True) == 0
 
     def test_ijpn_top_up_trim(self):
-        eng = _engine(settled_cash=500.0)          # £19.77 each with buffer → 25
-        assert eng._affordable_quantity("IJPN", 75, 1865.0, is_new_entry=False) == 25
+        # £19.77 each with buffer → 40 of 75 (53%), above the 50% top-up floor
+        eng = _engine(settled_cash=800.0)
+        assert eng._affordable_quantity("IJPN", 75, 1865.0, is_new_entry=False) == 40
+        # £500 covers 25 (33%) — under the floor since 2026-09-11, so skipped
+        eng = _engine(settled_cash=500.0)
+        assert eng._affordable_quantity("IJPN", 75, 1865.0, is_new_entry=False) == 0

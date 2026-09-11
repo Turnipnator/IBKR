@@ -624,7 +624,9 @@ class TradingBot:
                             f"cover extends on reconcile"
                         )
                 else:
-                    logger.info(f"  → Top-up failed: {result.message}")
+                    # Deliberate skips (stop-buffer gate, settled-cash floor)
+                    # come back the same way as broker failures.
+                    logger.info(f"  → Top-up not placed: {result.message}")
             else:
                 logger.info(
                     f"  → Skipped: already holding {opp.symbol} "
