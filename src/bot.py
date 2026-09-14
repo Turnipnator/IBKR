@@ -1109,14 +1109,31 @@ class TradingBot:
         IBKR's realizedPNL and commission in the underlying's trading
         currency (USD for USD-quoted UCITS, GBP for GBP-quoted) — display
         in that currency rather than re-FX'ing per fill, so the audit trail
-        matches the IBKR statement. Filter to SELL fills of protective stops
-        (TRAIL/STP) — the silent-fill case from the 2026-06-08 healthcheck.
-        Other fills (entry BUYs, drawdown-halt MKT exits) have their own
-        log paths.
+        matches the IBKR statement. The alert/cooldown/execution-row part is
+        filtered to protective-stop fills (TRAIL/STP) — the silent-fill case
+        from the 2026-06-08 healthcheck; entry BUYs and drawdown-halt MKT
+        exits have their own log paths. The trades-ledger status update at
+        the top runs for EVERY fill (see `_on_order_status`).
         """
         try:
             order_type = getattr(trade.order, "orderType", "") or ""
             action = getattr(trade.order, "action", "") or ""
+
+            # Ledger first, for every order type: move the placement row
+            # (SUBMITTED) to FILLED once the order is complete. This is what
+            # records entry prices (market BUYs are saved with price=0), and it
+            # is the only path that sees a stop that filled while the bot was
+            # down — ib_insync replays those via reqCompletedOrders on reconnect
+            # WITHOUT emitting orderStatusEvent, but the commission report
+            # always arrives.
+            if self._is_fully_filled(trade):
+                fill_px = float(
+                    getattr(fill.execution, "avgPrice", None)
+                    or getattr(fill.execution, "price", 0.0)
+                    or 0.0
+                )
+                self._mark_order_terminal(trade, "FILLED", price=fill_px)
+
             if order_type not in ("TRAIL", "STP", "STP LMT"):
                 return
             if action not in ("SELL", "BUY"):
@@ -1189,13 +1206,98 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error handling commission report: {e}")
 
+    def _on_order_status(self, trade):
+        """Fired by ib_insync on every orderStatus update for this client's orders.
+
+        Keeps the `trades` ledger honest: the row written at placement
+        (status=SUBMITTED) is moved to FILLED / CANCELLED / REJECTED when IBKR
+        reports the terminal state. Before 2026-09-14 nothing did this — entry
+        BUYs, replaced stops and Error-201 rejections stayed SUBMITTED forever
+        and the ledger recorded no entry fill price at all (120 stale rows on
+        the live DB, vs 4 orders actually working at IBKR).
+
+        'Inactive' is deliberately not terminal: a rejected order goes
+        Inactive -> Cancelled (Error 201 replays), and ib_insync appends the
+        error to `trade.log` before emitting the Cancelled status, so waiting
+        for Cancelled lets the log entry decide REJECTED vs a clean CANCELLED.
+        Orders that completed while the bot was disconnected do NOT come
+        through here (reqCompletedOrders is silent) — `_on_commission_report`
+        covers those.
+        """
+        try:
+            status = getattr(trade.orderStatus, "status", "") or ""
+            if status == "Filled":
+                self._mark_order_terminal(
+                    trade, "FILLED",
+                    price=getattr(trade.orderStatus, "avgFillPrice", 0.0),
+                )
+            elif status in ("Cancelled", "ApiCancelled"):
+                err = self._order_error(trade)
+                if err:
+                    self._mark_order_terminal(trade, "REJECTED", note=err)
+                else:
+                    self._mark_order_terminal(trade, "CANCELLED")
+        except Exception as e:
+            logger.error(f"Error handling order status: {e}")
+
+    @staticmethod
+    def _order_error(trade) -> str:
+        """Last IBKR error on the trade's log, or '' for a clean cancel."""
+        msg = ""
+        for entry in getattr(trade, "log", None) or []:
+            code = getattr(entry, "errorCode", 0) or 0
+            if code:
+                text = (getattr(entry, "message", "") or "").replace("<br>", " ")
+                msg = f"Error {code}: {text[:100]}".strip()
+        return msg
+
+    @staticmethod
+    def _is_fully_filled(trade) -> bool:
+        """True once IBKR reports the order complete (not on a partial fill)."""
+        try:
+            if getattr(trade.orderStatus, "status", "") == "Filled":
+                return True
+            remaining = getattr(trade, "remaining", None)
+            if callable(remaining):
+                return float(remaining()) <= 0
+        except Exception:
+            pass
+        return False
+
+    def _mark_order_terminal(self, trade, status, price=None, note=None):
+        """Move the placement row for `trade` to `status`; no-op if already done.
+
+        Never raises — this runs inside ib_insync event handlers, and a ledger
+        hiccup must not disturb order handling.
+        """
+        try:
+            order_id = trade.order.orderId
+            changed = self.db.update_trade_status(
+                order_id, status, price=price, note=note,
+            )
+        except Exception as e:
+            oid = getattr(getattr(trade, "order", None), "orderId", "?")
+            logger.warning(f"Could not update trades ledger for order {oid}: {e}")
+            return
+        if changed:
+            o = trade.order
+            px = f" @ {float(price):.4f}" if price else ""
+            extra = f" ({note})" if note else ""
+            logger.info(
+                f"Ledger: order {order_id} {o.action} "
+                f"{int(float(o.totalQuantity))} {trade.contract.symbol} "
+                f"{o.orderType} -> {status}{px}{extra}"
+            )
+
     def _register_fill_handlers(self):
-        """Subscribe to ib_insync commissionReportEvent (LIVE only).
+        """Subscribe to ib_insync commissionReportEvent + orderStatusEvent (LIVE only).
 
         The IB instance persists across reconnects (ConnectionManager doesn't
         recreate it), so one subscription at startup catches all subsequent
         fills — including server-side GTC trail-stops that fire while the bot
-        is disconnected and report when it reconnects.
+        is disconnected and report when it reconnects. orderStatusEvent keeps
+        the trades ledger's placement rows in step with IBKR (FILLED /
+        CANCELLED / REJECTED) — see `_on_order_status`.
         """
         if self.dry_run:
             return
@@ -1209,6 +1311,16 @@ class TradingBot:
             logger.info("Subscribed to commissionReportEvent for LIVE fill alerts")
         except Exception as e:
             logger.error(f"Failed to subscribe to commissionReportEvent: {e}")
+        try:
+            ib = self.connection.ib
+            try:
+                ib.orderStatusEvent -= self._on_order_status
+            except (ValueError, Exception):
+                pass
+            ib.orderStatusEvent += self._on_order_status
+            logger.info("Subscribed to orderStatusEvent for trades-ledger status tracking")
+        except Exception as e:
+            logger.error(f"Failed to subscribe to orderStatusEvent: {e}")
 
     def _check_watchdog(self):
         """Self-restart if the data probe has been failing continuously for too long.

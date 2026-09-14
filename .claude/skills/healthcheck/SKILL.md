@@ -178,8 +178,19 @@ ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "grep 'Protective stop FILLED' /root/IBKR_Bot/logs/trading.log | tail -15"
-ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 -header data/trading.db 'SELECT status, COUNT(*) FROM trades GROUP BY status;'"
+ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "cd /root/IBKR_Bot && sqlite3 -header data/trading.db \"SELECT status, COUNT(*) FROM trades GROUP BY status; SELECT id, symbol, action, quantity, order_id, substr(reason,1,30) reason FROM trades WHERE status='SUBMITTED' ORDER BY id;\""
 ```
+
+Ledger lifecycle (since 2026-09-14): every placed order writes a `SUBMITTED`
+row; `_on_order_status` (ib `orderStatusEvent`) moves it to `FILLED` /
+`CANCELLED` / `REJECTED`, and `_on_commission_report` also marks `FILLED` for
+stops that fired while the bot was down. So **the `SUBMITTED` rows must be
+exactly the working stops in the section-6 probe** (same orderIds) — any extra
+`SUBMITTED` row is an order the handlers missed. `FILLED` counts both filled
+placements and the per-partial-fill stop execution rows (reason `… stop fill`).
+Entry BUY rows now carry the fill price; rows tagged `backfilled 2026-09-14`
+predate the handler and have price 0 (never recorded). Startup must show
+`Subscribed to orderStatusEvent for trades-ledger status tracking`.
 
 Assess: win count vs loss count, avg win vs avg loss (payoff ratio), and
 **commission as % of the average risk unit** — at this account size fee drag,
@@ -217,7 +228,7 @@ run in-image:
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker run --rm --user root -v /root/IBKR_Bot/tests:/app/tests:ro ibkr_bot-trading-bot:latest sh -c 'pip install -q pytest 2>/dev/null; cd /app && python -m pytest tests -q 2>&1 | tail -3'"
 ```
 
-Expected: **all passing** (106 as of 2026-08-31). Any failure is a regression —
+Expected: **all passing** (172 as of 2026-09-14). Any failure is a regression —
 there is no longer a known-bad set to ignore.
 
 ## 14. NETWORK SECURITY

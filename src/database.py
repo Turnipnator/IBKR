@@ -236,6 +236,49 @@ class Database:
         finally:
             conn.close()
 
+    TERMINAL_TRADE_STATUSES = ("FILLED", "CANCELLED", "REJECTED")
+
+    def update_trade_status(
+        self, order_id: Optional[int], status: str,
+        price: Optional[float] = None, note: Optional[str] = None,
+    ) -> int:
+        """Move the SUBMITTED ledger row(s) for `order_id` to a terminal status.
+
+        Returns the number of rows changed. Only rows still at SUBMITTED are
+        touched, so repeated events (IBKR re-sends orderStatus; a stop reports
+        once per partial fill) are no-ops, an unknown order_id (probe/manual
+        orders) changes nothing, and the execution rows the fill notifier
+        inserts with status=FILLED are never rewritten.
+
+        `price` only fills in a row whose recorded price is 0 — market orders
+        are saved with price=0 because the fill price is unknown at placement.
+        A stop's recorded initial trigger is never overwritten; its actual exit
+        price lives on the execution row. `note` is appended to `reason`.
+        """
+        if status not in self.TERMINAL_TRADE_STATUSES:
+            raise ValueError(f"not a terminal trade status: {status!r}")
+        if order_id is None:
+            return 0
+        px = float(price or 0.0)
+        note = (note or "").strip()
+        conn = self._get_connection()
+        try:
+            cur = conn.execute("""
+                UPDATE trades
+                SET status = ?,
+                    price = CASE WHEN price = 0 AND ? > 0 THEN ? ELSE price END,
+                    reason = CASE WHEN ? != ''
+                                  THEN COALESCE(reason, '') || ' | ' || ?
+                                  ELSE reason END,
+                    executed_at = ?
+                WHERE order_id = ? AND status = 'SUBMITTED'
+            """, (status, px, px, note, note,
+                  datetime.now().isoformat(), int(order_id)))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
     # ==================== Paper Trade Methods ====================
 
     def save_paper_trade(
