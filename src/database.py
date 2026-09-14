@@ -147,6 +147,11 @@ class Database:
                 "ALTER TABLE paper_trades ADD COLUMN atr_stop REAL",
                 "ALTER TABLE paper_trades ADD COLUMN min_exit_date TEXT",
                 "ALTER TABLE paper_trades ADD COLUMN signal_score REAL",
+                # 2026-09-14: stop-fill execution rows carry IBKR's realized
+                # P&L and commission as numbers (were only in the reason text)
+                "ALTER TABLE trades ADD COLUMN pnl REAL",
+                "ALTER TABLE trades ADD COLUMN commission REAL",
+                "ALTER TABLE trades ADD COLUMN currency TEXT",
             ]:
                 try:
                     conn.execute(migration_sql)
@@ -222,17 +227,143 @@ class Database:
         self, symbol: str, action: str, quantity: int, price: float,
         order_id: Optional[int] = None, status: str = "PENDING",
         reason: Optional[str] = None,
+        pnl: Optional[float] = None, commission: Optional[float] = None,
+        currency: Optional[str] = None,
     ):
-        """Log a trade to the database."""
+        """Log a trade to the database.
+
+        `pnl` / `commission` / `currency` are set on stop-fill execution rows
+        (IBKR's realizedPNL and commission in the instrument's currency, as
+        the commission report gives them); placement rows leave them NULL.
+        """
         conn = self._get_connection()
         try:
             conn.execute("""
                 INSERT INTO trades
-                (symbol, action, quantity, price, order_id, status, reason, executed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (symbol, action, quantity, price, order_id, status, reason,
+                 executed_at, pnl, commission, currency)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (symbol, action, quantity, price, order_id, status, reason,
-                  datetime.now().isoformat()))
+                  datetime.now().isoformat(), pnl, commission, currency))
             conn.commit()
+        finally:
+            conn.close()
+
+    # ---- live closed-trade tape --------------------------------------------
+
+    @staticmethod
+    def _rate_to_base(ccy: Optional[str], fx_rates: dict, base: str) -> Optional[float]:
+        """BASE per 1 unit of `ccy` from an IBKR ExchangeRate dict; None if unknown."""
+        code = (ccy or base or "").upper()
+        base = (base or "").upper()
+        if not code or code == base or code == "BASE":
+            return 1.0
+        if code == "GBX":
+            gbp = 1.0 if base == "GBP" else fx_rates.get("GBP")
+            return None if gbp is None else gbp / 100.0
+        rate = fx_rates.get(code)
+        return float(rate) if rate else None
+
+    def get_live_round_trips(self, fx_rates: Optional[dict] = None,
+                             base: str = "GBP") -> list[dict]:
+        """One row per closed live round-trip, newest first.
+
+        Built from the stop-fill execution rows the fill notifier writes
+        (status FILLED, reason '... stop fill ...'), merged per order_id so a
+        stop that filled in partials is one trade. `pnl`/`commission` are in
+        the instrument's currency; `pnl_base`/`commission_base` are converted
+        with `fx_rates` (BASE per 1 CCY, as `ConnectionManager.get_fx_rates`
+        returns) and are None when the rate is unknown. Rows whose pnl was
+        never recorded (pre-2026-09-14 fills not backfilled) are skipped.
+        """
+        fx_rates = fx_rates or {}
+        conn = self._get_connection()
+        try:
+            rows = conn.execute("""
+                SELECT order_id, symbol, action,
+                       SUM(quantity)                    AS quantity,
+                       SUM(pnl)                         AS pnl,
+                       COALESCE(SUM(commission), 0.0)   AS commission,
+                       MAX(currency)                    AS currency,
+                       MAX(price)                       AS price,
+                       MAX(executed_at)                 AS executed_at,
+                       COUNT(*)                         AS fills
+                FROM trades
+                WHERE status = 'FILLED'
+                  AND reason LIKE '%stop fill%'
+                  AND pnl IS NOT NULL
+                GROUP BY order_id
+                ORDER BY MAX(executed_at) DESC
+            """).fetchall()
+        finally:
+            conn.close()
+        out = []
+        for r in rows:
+            d = dict(r)
+            rate = self._rate_to_base(d.get("currency"), fx_rates, base)
+            d["fx_to_base"] = rate
+            d["pnl_base"] = (d["pnl"] * rate) if rate is not None else None
+            d["commission_base"] = (
+                (d["commission"] * rate) if rate is not None else None
+            )
+            out.append(d)
+        return out
+
+    def get_live_trade_stats(self, fx_rates: Optional[dict] = None,
+                             base: str = "GBP") -> dict:
+        """Cumulative stats over the live closed-trade tape, in base currency.
+
+        Wins/losses are judged on native-currency P&L (sign is FX-proof);
+        sums use `pnl_base` and skip trips whose currency has no rate — those
+        are reported in `fx_missing` so the caller can say so.
+        """
+        trips = self.get_live_round_trips(fx_rates, base)
+        stats = {
+            "closed": len(trips), "wins": 0, "losses": 0, "win_rate": 0.0,
+            "total_pnl_base": 0.0, "total_commission_base": 0.0,
+            "avg_win_base": 0.0, "avg_loss_base": 0.0, "payoff": 0.0,
+            "best": None, "worst": None, "fx_missing": [],
+            "priced": 0, "last_exit": trips[0]["executed_at"] if trips else None,
+        }
+        wins, losses = [], []
+        for t in trips:
+            if t["pnl"] > 0:
+                stats["wins"] += 1
+            else:
+                stats["losses"] += 1
+            if t["pnl_base"] is None:
+                if t["currency"] not in stats["fx_missing"]:
+                    stats["fx_missing"].append(t["currency"])
+                continue
+            stats["priced"] += 1
+            stats["total_pnl_base"] += t["pnl_base"]
+            stats["total_commission_base"] += t["commission_base"] or 0.0
+            (wins if t["pnl_base"] > 0 else losses).append(t["pnl_base"])
+            if stats["best"] is None or t["pnl_base"] > stats["best"]["pnl_base"]:
+                stats["best"] = t
+            if stats["worst"] is None or t["pnl_base"] < stats["worst"]["pnl_base"]:
+                stats["worst"] = t
+        if stats["closed"]:
+            stats["win_rate"] = stats["wins"] / stats["closed"] * 100.0
+        if wins:
+            stats["avg_win_base"] = sum(wins) / len(wins)
+        if losses:
+            stats["avg_loss_base"] = sum(losses) / len(losses)
+        if wins and losses and stats["avg_loss_base"] != 0:
+            stats["payoff"] = stats["avg_win_base"] / abs(stats["avg_loss_base"])
+        return stats
+
+    def count_live_round_trips_today(self) -> int:
+        """Stop fills (distinct orders) whose execution landed today."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        conn = self._get_connection()
+        try:
+            row = conn.execute("""
+                SELECT COUNT(DISTINCT order_id) FROM trades
+                WHERE status = 'FILLED' AND reason LIKE '%stop fill%'
+                  AND substr(executed_at, 1, 10) = ?
+            """, (today,)).fetchone()
+            return int(row[0] or 0)
         finally:
             conn.close()
 

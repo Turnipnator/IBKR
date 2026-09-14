@@ -228,7 +228,7 @@ run in-image:
 ssh -i ~/.ssh/id_ed25519_vps root@149.102.144.190 "docker run --rm --user root -v /root/IBKR_Bot/tests:/app/tests:ro ibkr_bot-trading-bot:latest sh -c 'pip install -q pytest 2>/dev/null; cd /app && python -m pytest tests -q 2>&1 | tail -3'"
 ```
 
-Expected: **all passing** (184 as of 2026-09-14). Any failure is a regression —
+Expected: **all passing** (202 as of 2026-09-14). Any failure is a regression —
 there is no longer a known-bad set to ignore.
 
 ## 14. NETWORK SECURITY

@@ -332,15 +332,32 @@ class TradingBot:
             logger.debug(f"get_account_summary failed: {e}")
             return {}
 
+    def _get_fx_rates(self) -> dict:
+        """BASE-per-1-CCY rates for Telegram P&L conversion; {} if unavailable."""
+        try:
+            return self.connection.get_fx_rates() or {}
+        except Exception as e:
+            logger.debug(f"FX rates unavailable for Telegram: {e}")
+            return {}
+
     def _get_bot_status(self) -> dict:
-        """Return a snapshot of bot/connection state for /health."""
+        """Return a snapshot of bot/connection state for /health and /pnl."""
         try:
             connected = bool(self.connection.ib.isConnected())
         except Exception:
             connected = False
+        session = None
+        if not self.dry_run:
+            # Same IBKR BASE-currency figures the daily-loss gate uses, so
+            # /pnl and the `Daily P&L:` log line can never disagree.
+            try:
+                session = self._compute_session_pnl()
+            except Exception as e:
+                logger.debug(f"Session P&L unavailable for Telegram: {e}")
         return {
             "connected": connected,
             "dry_run": self.dry_run,
+            "session_pnl": session,
             "uptime_seconds": (datetime.now() - self._started_at).total_seconds(),
             "last_rebalance": self._last_rebalance_at,
             "last_risk_check": self._last_risk_check,
@@ -1173,6 +1190,9 @@ class TradingBot:
                     order_id=trade.order.orderId,
                     status="FILLED",
                     reason=f"{order_type} stop fill (realizedPnL={sym}{pnl:+.2f})",
+                    pnl=pnl,
+                    commission=commission,
+                    currency=ccy_code,
                 )
             except Exception as e:
                 logger.warning(f"Could not log fill to trades table: {e}")
@@ -1444,6 +1464,8 @@ class TradingBot:
                             self._get_account_summary,
                             self._get_bot_status,
                             self._get_live_positions,
+                            fx_resolver=self._get_fx_rates,
+                            live_mode=not self.dry_run,
                         )
                         time.sleep(3)
                     continue
@@ -1485,6 +1507,8 @@ class TradingBot:
                         self._get_account_summary,
                         self._get_bot_status,
                         self._get_live_positions,
+                        fx_resolver=self._get_fx_rates,
+                        live_mode=not self.dry_run,
                     )
                     time.sleep(3)
 

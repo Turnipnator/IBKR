@@ -593,6 +593,8 @@ Bot is now monitoring the market.
         account_fetcher=None,
         status_fetcher=None,
         positions_provider=None,
+        fx_resolver=None,
+        live_mode: bool = False,
     ) -> Optional[str]:
         """
         Process a command and return the response.
@@ -605,6 +607,10 @@ Bot is now monitoring the market.
             account_fetcher: Optional callable returning a dict of live IBKR account summary values
             status_fetcher: Optional callable returning a dict of bot health/state
             positions_provider: Optional callable returning live IBKR positions (live mode only)
+            fx_resolver: Optional callable returning {CCY: base-per-1-CCY} rates
+            live_mode: True when the bot trades for real. /stats, /history and
+                /pnl then read the live trades ledger + IBKR instead of the
+                paper_trades table (which is never written in live mode)
 
         Returns:
             Response message or None if not a command
@@ -617,13 +623,21 @@ Bot is now monitoring the market.
         if command in ["/status", "/positions", "/pos"]:
             return self._handle_positions_command(db, price_fetcher, positions_provider)
         elif command in ["/stats", "/performance"]:
-            return self._handle_stats_command(db, currency_resolver)
+            return self._handle_stats_command(
+                db, currency_resolver, live_mode=live_mode,
+                fx_resolver=fx_resolver, positions_provider=positions_provider,
+            )
         elif command == "/balance":
             return self._handle_balance_command(account_fetcher, currency_resolver)
         elif command == "/pnl":
-            return self._handle_pnl_command(db, price_fetcher, currency_resolver)
+            return self._handle_pnl_command(
+                db, price_fetcher, currency_resolver,
+                live_mode=live_mode, status_fetcher=status_fetcher,
+            )
         elif command == "/history":
-            return self._handle_history_command(db, currency_resolver)
+            return self._handle_history_command(
+                db, currency_resolver, live_mode=live_mode, fx_resolver=fx_resolver,
+            )
         elif command == "/health":
             return self._handle_health_command(status_fetcher)
         elif command == "/markets":
@@ -756,8 +770,123 @@ Bot is now monitoring the market.
             logger.error(f"Error fetching positions: {e}")
             return f"\u26A0\uFE0F Error fetching positions: {e}"
 
-    def _handle_stats_command(self, db, currency_resolver=None) -> str:
-        """Handle /stats command - show paper trade statistics."""
+    @staticmethod
+    def _fx(fx_resolver) -> dict:
+        if not fx_resolver:
+            return {}
+        try:
+            return fx_resolver() or {}
+        except Exception as e:
+            logger.debug(f"FX resolver failed: {e}")
+            return {}
+
+    @staticmethod
+    def _base_code(currency_resolver) -> str:
+        if not currency_resolver:
+            return "GBP"
+        try:
+            return (currency_resolver() or "GBP").upper()
+        except Exception:
+            return "GBP"
+
+    def _live_stats_message(self, db, ccy, base_code, fx_resolver,
+                            positions_provider) -> str:
+        """/stats in LIVE mode.
+
+        Closed-trade tape from the trades ledger (stop-fill execution rows,
+        one round-trip per orderId, IBKR's realized P&L converted to base at
+        today's rates), equity curve from portfolio_snapshots, open-position
+        count from IBKR.
+        """
+        fx = self._fx(fx_resolver)
+        stats = db.get_live_trade_stats(fx, base_code)
+
+        open_n = None
+        if positions_provider:
+            try:
+                live = positions_provider()
+                open_n = len(live) if live is not None else None
+            except Exception as e:
+                logger.debug(f"Positions provider failed: {e}")
+
+        def money(v):
+            return f"{'+' if v >= 0 else '-'}{ccy}{abs(v):,.2f}"
+
+        lines = ["📊 <b>Trading Stats</b> — 🔥 LIVE", ""]
+
+        snapshot = db.get_latest_portfolio_snapshot()
+        if snapshot:
+            balance = snapshot["equity"]
+            peak = snapshot["peak_equity"]
+            dd_pct = snapshot["drawdown"] * 100
+            starting = db.get_initial_equity() or balance
+            total = balance - starting
+            ret_pct = (total / starting * 100) if starting > 0 else 0.0
+            emoji = "🟢" if total >= 0 else "🔴"
+            lines += [
+                f"💰 <b>Equity:</b> {ccy}{balance:,.2f} "
+                f"<i>(started {ccy}{starting:,.0f})</i>",
+                f"{emoji} <b>Total P&L:</b> {money(total)} "
+                f"({'+' if ret_pct >= 0 else ''}{ret_pct:.2f}%)",
+                f"📉 <b>Drawdown:</b> {dd_pct:.2f}% (peak {ccy}{peak:,.0f})",
+                "",
+            ]
+        else:
+            lines += ["⚠️ No portfolio snapshot yet", ""]
+
+        closed = stats["closed"]
+        lines.append(f"<b>Closed round-trips:</b> {closed}")
+        if closed:
+            wr = stats["win_rate"]
+            perf = "🔥" if wr >= 60 else ("✅" if wr >= 50 else "🟡")
+            lines += [
+                f"<b>Winners:</b> {stats['wins']} | <b>Losers:</b> {stats['losses']} "
+                f"| <b>Win rate:</b> {wr:.1f}% {perf}",
+                f"<b>Realized:</b> {money(stats['total_pnl_base'])} "
+                f"<i>(net of {ccy}{stats['total_commission_base']:,.2f} commission)</i>",
+            ]
+            if stats["wins"] and stats["losses"] and stats["payoff"]:
+                lines.append(
+                    f"<b>Avg win:</b> {money(stats['avg_win_base'])} | "
+                    f"<b>Avg loss:</b> {money(stats['avg_loss_base'])} | "
+                    f"<b>Payoff:</b> {stats['payoff']:.2f}x"
+                )
+            best, worst = stats["best"], stats["worst"]
+            if best:
+                lines.append(
+                    f"<b>Best:</b> {best['symbol']} {money(best['pnl_base'])} "
+                    f"<i>({_currency_symbol(best['currency'])}{best['pnl']:+,.2f})</i>"
+                )
+            if worst and worst is not best:
+                lines.append(
+                    f"<b>Worst:</b> {worst['symbol']} {money(worst['pnl_base'])} "
+                    f"<i>({_currency_symbol(worst['currency'])}{worst['pnl']:+,.2f})</i>"
+                )
+            if stats["last_exit"]:
+                lines.append(f"<b>Last exit:</b> {stats['last_exit'][:10]}")
+            if stats["fx_missing"]:
+                lines.append(
+                    f"⚠️ No FX rate for {', '.join(stats['fx_missing'])} "
+                    f"— those trips are left out of the {ccy} totals"
+                )
+        else:
+            lines.append("<i>No stop fills recorded yet.</i>")
+
+        lines += [
+            "",
+            f"<b>Open positions:</b> {open_n if open_n is not None else 'n/a'}",
+            "<i>Round-trips closed by a protective stop; P&L at today's IBKR FX rates.</i>",
+            f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>",
+        ]
+        return "\n".join(lines)
+
+    def _handle_stats_command(self, db, currency_resolver=None, live_mode=False,
+                              fx_resolver=None, positions_provider=None) -> str:
+        """Handle /stats command - cumulative closed-trade and equity stats.
+
+        LIVE: trades ledger + IBKR (see `_live_stats_message`).
+        Paper: the paper_trades table, unchanged.
+        """
         if db is None:
             return "\u26A0\uFE0F Cannot fetch stats - no database connection"
 
@@ -768,6 +897,12 @@ Bot is now monitoring the market.
                     ccy = _currency_symbol(currency_resolver())
                 except Exception as e:
                     logger.debug(f"Currency resolver failed: {e}")
+
+            if live_mode:
+                return self._live_stats_message(
+                    db, ccy, self._base_code(currency_resolver),
+                    fx_resolver, positions_provider,
+                )
 
             stats = db.get_paper_trade_stats()
 
@@ -915,8 +1050,58 @@ Bot is now monitoring the market.
             logger.error(f"Error fetching balance: {e}")
             return f"\u26a0\ufe0f Error fetching balance: {e}"
 
+    def _live_pnl_message(self, db, ccy, status_fetcher) -> str:
+        """/pnl in LIVE mode.
+
+        IBKR's own BASE-currency realized/unrealized for the session, read
+        through the bot status dict (the same figures the daily-loss gate and
+        the `Daily P&L:` log line use), plus today's stop fills from the ledger.
+        """
+        session = None
+        if status_fetcher:
+            try:
+                session = (status_fetcher() or {}).get("session_pnl")
+            except Exception as e:
+                logger.debug(f"Status fetcher failed: {e}")
+        if not session:
+            return (
+                "⚠️ Live P&L unavailable — IBKR account values "
+                "not readable right now (disconnected?)"
+            )
+        realized, unrealized = float(session[0]), float(session[1])
+        total = realized + unrealized
+        try:
+            closed_today = db.count_live_round_trips_today()
+        except Exception as e:
+            logger.debug(f"Closed-today count failed: {e}")
+            closed_today = 0
+        try:
+            from .config import trading_config as _tc
+            cap = float(_tc.max_daily_loss)
+        except Exception:
+            cap = None
+
+        def money(v):
+            return f"{'+' if v >= 0 else '-'}{ccy}{abs(v):,.2f}"
+
+        cap_line = ""
+        if cap:
+            used = (-total / cap * 100) if total < 0 else 0.0
+            cap_line = f"<b>Daily-loss cap:</b> -{ccy}{cap:,.0f} ({used:.0f}% used)\n"
+        plural = "" if closed_today == 1 else "s"
+        return (
+            f"📊 <b>Today's P&L</b> — 🔥 LIVE\n\n"
+            f"<b>Realized:</b> {money(realized)} ({closed_today} stop fill{plural} today)\n"
+            f"<b>Unrealized:</b> {money(unrealized)} (open positions, IBKR mark)\n"
+            f"━━━━━━━━━━━━\n"
+            f"{'🟢' if total >= 0 else '🔴'} <b>Session:</b> {money(total)}\n"
+            f"{cap_line}"
+            f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
+        )
+
     def _handle_pnl_command(
-        self, db, price_fetcher=None, currency_resolver=None
+        self, db, price_fetcher=None, currency_resolver=None,
+        live_mode=False, status_fetcher=None,
     ) -> str:
         """Handle /pnl command \u2014 today's P&L breakdown."""
         if db is None:
@@ -929,6 +1114,9 @@ Bot is now monitoring the market.
                     ccy = _currency_symbol(currency_resolver())
                 except Exception:
                     pass
+
+            if live_mode:
+                return self._live_pnl_message(db, ccy, status_fetcher)
 
             realized_today = db.get_daily_pnl()
 
@@ -985,7 +1173,11 @@ Bot is now monitoring the market.
             logger.error(f"Error fetching P&L: {e}")
             return f"\u26a0\ufe0f Error fetching P&L: {e}"
 
-    def _handle_history_command(self, db, currency_resolver=None) -> str:
+    def _handle_history_command(self, db, currency_resolver=None,
+                                live_mode=False, fx_resolver=None) -> str:
+        # Equity curve always comes from portfolio_snapshots (written in both
+        # modes); the closed-trade block reads the live trades ledger in LIVE
+        # mode and paper_trades otherwise.
         """Handle /history command \u2014 equity curve summary."""
         if db is None:
             return "\u26a0\ufe0f Cannot fetch history \u2014 no database connection"
@@ -1015,24 +1207,48 @@ Bot is now monitoring the market.
                     "SELECT COUNT(*) FROM portfolio_snapshots"
                 ).fetchone()[0] or 0
 
-                closed = conn.execute(
-                    "SELECT COUNT(*), "
-                    "SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END), "
-                    "SUM(CASE WHEN pnl_amount <= 0 THEN 1 ELSE 0 END), "
-                    "COALESCE(SUM(pnl_amount), 0), "
-                    "MAX(pnl_amount), MIN(pnl_amount) "
-                    "FROM paper_trades WHERE status != 'OPEN'"
-                ).fetchone()
-                best = conn.execute(
-                    "SELECT symbol, pnl_amount FROM paper_trades "
-                    "WHERE status != 'OPEN' ORDER BY pnl_amount DESC LIMIT 1"
-                ).fetchone()
-                worst = conn.execute(
-                    "SELECT symbol, pnl_amount FROM paper_trades "
-                    "WHERE status != 'OPEN' ORDER BY pnl_amount ASC LIMIT 1"
-                ).fetchone()
+                closed = best = worst = None
+                if not live_mode:
+                    closed = conn.execute(
+                        "SELECT COUNT(*), "
+                        "SUM(CASE WHEN pnl_amount > 0 THEN 1 ELSE 0 END), "
+                        "SUM(CASE WHEN pnl_amount <= 0 THEN 1 ELSE 0 END), "
+                        "COALESCE(SUM(pnl_amount), 0), "
+                        "MAX(pnl_amount), MIN(pnl_amount) "
+                        "FROM paper_trades WHERE status != 'OPEN'"
+                    ).fetchone()
+                    best = conn.execute(
+                        "SELECT symbol, pnl_amount FROM paper_trades "
+                        "WHERE status != 'OPEN' ORDER BY pnl_amount DESC LIMIT 1"
+                    ).fetchone()
+                    worst = conn.execute(
+                        "SELECT symbol, pnl_amount FROM paper_trades "
+                        "WHERE status != 'OPEN' ORDER BY pnl_amount ASC LIMIT 1"
+                    ).fetchone()
             finally:
                 conn.close()
+
+            recent = []
+            if live_mode:
+                # Live tape: one round-trip per orderId from the stop-fill
+                # execution rows, converted to base at today's IBKR rates.
+                trips = db.get_live_round_trips(
+                    self._fx(fx_resolver), self._base_code(currency_resolver)
+                )
+                priced = [t for t in trips if t["pnl_base"] is not None]
+                closed = (
+                    len(trips),
+                    sum(1 for t in trips if t["pnl"] > 0),
+                    sum(1 for t in trips if t["pnl"] <= 0),
+                    sum(t["pnl_base"] for t in priced),
+                    None, None,
+                )
+                if priced:
+                    b = max(priced, key=lambda t: t["pnl_base"])
+                    w = min(priced, key=lambda t: t["pnl_base"])
+                    best = (b["symbol"], b["pnl_base"])
+                    worst = (w["symbol"], w["pnl_base"])
+                recent = trips[:5]
 
             if not first or not last:
                 return (
@@ -1079,6 +1295,21 @@ Bot is now monitoring the market.
                 lines.append(f"  Best: {best[0]} +{ccy}{best[1]:,.2f}")
             if worst and worst[1] is not None and worst[1] < 0:
                 lines.append(f"  Worst: {worst[0]} {ccy}{worst[1]:,.2f}")
+
+            if recent:
+                lines.append("")
+                lines.append("<b>Recent exits:</b>")
+                for t in recent:
+                    native = _currency_symbol(t["currency"])
+                    if t["pnl_base"] is None:
+                        base_txt = "n/a"
+                    else:
+                        sgn = "+" if t["pnl_base"] >= 0 else "-"
+                        base_txt = f"{sgn}{ccy}{abs(t['pnl_base']):,.2f}"
+                    lines.append(
+                        f"  {t['executed_at'][5:10]} {t['symbol']} {t['action']} "
+                        f"{int(t['quantity'])} @ {native}{t['price']:,.2f} → {base_txt}"
+                    )
 
             lines.append(
                 f"\n<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>"
@@ -1217,21 +1448,21 @@ Bot is now monitoring the market.
         return """\U0001F916 <b>IBKR Trading Bot Commands</b>
 
 \U0001F4CA <b>Monitoring</b>
-<b>/positions</b> \u2014 open paper trades with live P&L
+<b>/positions</b> \u2014 open positions with live P&L
 <b>/balance</b> \u2014 live IBKR account balance
 <b>/markets</b> \u2014 current signals from the watchlist
 <b>/health</b> \u2014 bot connection & health
 
 \U0001F4B0 <b>Performance</b>
-<b>/pnl</b> \u2014 today's realised + unrealised P&L
-<b>/stats</b> \u2014 cumulative trading statistics
-<b>/history</b> \u2014 equity curve & closed-trade summary
+<b>/pnl</b> \u2014 today's realised + unrealised P&L (IBKR session figures)
+<b>/stats</b> \u2014 cumulative closed-trade statistics
+<b>/history</b> \u2014 equity curve & recent stop-fill exits
 
 <b>/help</b> \u2014 this message
 
 The bot will automatically notify you of:
 \u2022 New trade opportunities
-\u2022 Paper trades opened/closed
+\u2022 Entries placed and protective stops filled
 \u2022 Daily summaries
 \u2022 Connection issues"""
 
@@ -1256,6 +1487,8 @@ def check_telegram_commands(
     account_fetcher=None,
     status_fetcher=None,
     positions_provider=None,
+    fx_resolver=None,
+    live_mode: bool = False,
 ) -> None:
     """
     Check for and process any pending Telegram commands.
@@ -1297,6 +1530,8 @@ def check_telegram_commands(
                 account_fetcher,
                 status_fetcher,
                 positions_provider,
+                fx_resolver=fx_resolver,
+                live_mode=live_mode,
             )
             if response:
                 notifier.send_sync(response)
