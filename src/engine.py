@@ -104,6 +104,7 @@ class DecisionEngine:
         self.position_manager = PositionManager(self.connection, self.order_manager)
 
         self.state = EngineState()
+        self._cash_committed_base = 0.0  # see reset_cash_committed()
 
     def _get_all_symbols(self) -> list[str]:
         """Get all symbols from trading universe (reloads watchlist each cycle)."""
@@ -509,6 +510,7 @@ class DecisionEngine:
 
         logger.info("Starting trend-following analysis...")
         self.state = EngineState(last_run=datetime.now())
+        self.reset_cash_committed()
 
         # Get portfolio value
         portfolio = self.position_manager.get_portfolio_value()
@@ -678,6 +680,61 @@ class DecisionEngine:
             logger.warning(f"Could not read AvailableFunds: {e}")
             return None
 
+    # ---- per-cycle committed-cash tally ------------------------------------
+    # IBKR reserves settled cash the moment a BUY is accepted, but the
+    # AvailableFunds we read is ib_insync's cached account summary, which IBKR
+    # pushes on a lag. 2026-09-14 13:01:53: a CMOD top-up consumed ~£700 and
+    # 0.2 s later the IJPN entry still read £1,804 (IBKR's real figure was
+    # £1,102.65), sized 74 shares untrimmed and was rejected Error 201 — the
+    # gate's own "cash needed" matched IBKR's to within £5; only the input was
+    # stale. So every BUY accepted in this cycle is charged to a tally that
+    # `_affordable_quantity` subtracts from the read, a rejected BUY is
+    # released again (IBKR never reserved for it), and the tally is reset when
+    # a new analysis cycle starts. Deterministic; no extra broker round-trip.
+
+    def reset_cash_committed(self) -> None:
+        """Start of a rebalance cycle: nothing placed yet."""
+        self._cash_committed_base = 0.0
+
+    def _cash_committed(self) -> float:
+        return float(getattr(self, "_cash_committed_base", 0.0) or 0.0)
+
+    def _estimated_cost_base(self, symbol: str, quantity: int, price: float) -> float:
+        """quantity × price × fx × (1 + settled_cash_buffer) in base currency —
+        the same estimate `_affordable_quantity` uses, so charge and check agree."""
+        if quantity <= 0 or price <= 0:
+            return 0.0
+        ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
+        get_rates = getattr(self.connection, "get_fx_rates", None)
+        rates = (get_rates() if callable(get_rates) else None) or {}
+        fx = self._fx_to_base(ccy, rates)
+        buffer = float(getattr(self.config, "settled_cash_buffer", 0.0) or 0.0)
+        return quantity * price * fx * (1.0 + buffer)
+
+    def _commit_cash(self, symbol: str, quantity: int, price: float) -> None:
+        """A BUY was accepted by IBKR: charge its estimated cost to this cycle."""
+        try:
+            cost = self._estimated_cost_base(symbol, quantity, price)
+        except Exception as e:  # never let bookkeeping break the order path
+            logger.warning(f"{symbol}: could not estimate committed cash: {e}")
+            return
+        if cost <= 0:
+            return
+        self._cash_committed_base = self._cash_committed() + cost
+        logger.info(
+            f"  {symbol}: ~{cost:,.2f} base committed by this BUY "
+            f"(cycle total {self._cash_committed():,.2f})"
+        )
+
+    def _release_cash(self, symbol: str, quantity: int, price: float) -> None:
+        """A BUY was rejected: IBKR reserved nothing, so un-charge it."""
+        try:
+            cost = self._estimated_cost_base(symbol, quantity, price)
+        except Exception as e:
+            logger.warning(f"{symbol}: could not estimate released cash: {e}")
+            return
+        self._cash_committed_base = max(0.0, self._cash_committed() - cost)
+
     def _affordable_quantity(
         self, symbol: str, quantity: int, price: float, *, is_new_entry: bool
     ) -> int:
@@ -701,6 +758,17 @@ class DecisionEngine:
         settled = self._get_settled_cash_base()
         if settled is None:
             return quantity  # can't tell — behave as before
+
+        committed = self._cash_committed()
+        if committed > 0:
+            # The cached AvailableFunds may predate BUYs placed seconds ago in
+            # this same cycle (IJPN 2026-09-14) — net them off first.
+            effective = max(0.0, settled - committed)
+            logger.info(
+                f"  {symbol}: settled cash {settled:,.2f} less {committed:,.2f} "
+                f"already committed this cycle = {effective:,.2f} available"
+            )
+            settled = effective
 
         ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
         fx = self._fx_to_base(ccy, self.connection.get_fx_rates() or {})
@@ -785,6 +853,8 @@ class DecisionEngine:
             quantity=quantity,
             reason=f"Trend signal: {opportunity.signal_score:+.2f}",
         )
+        if action == OrderAction.BUY and result.success:
+            self._commit_cash(opportunity.symbol, quantity, opportunity.current_price)
 
         # placeOrder() returns synchronously, but the BUY isn't on the books
         # until it FILLS. Attaching the protective SELL before the fill makes
@@ -808,6 +878,10 @@ class DecisionEngine:
                     logger.warning(
                         f"{opportunity.symbol}: order rejected post-submit — {err}"
                     )
+                    if action == OrderAction.BUY:
+                        self._release_cash(
+                            opportunity.symbol, quantity, opportunity.current_price
+                        )
                     result.success = False
                     result.message = f"Rejected: {err}"
                     return result
@@ -929,6 +1003,7 @@ class DecisionEngine:
         )
         if not result.success or result.trade is None:
             return result
+        self._commit_cash(opportunity.symbol, delta, opportunity.current_price)
 
         filled = False
         terminal_bad = {"Cancelled", "ApiCancelled", "Inactive"}
@@ -944,6 +1019,7 @@ class DecisionEngine:
                 logger.warning(
                     f"{opportunity.symbol}: top-up rejected post-submit — {err}"
                 )
+                self._release_cash(opportunity.symbol, delta, opportunity.current_price)
                 result.success = False
                 result.message = f"Rejected: {err}"
                 return result
