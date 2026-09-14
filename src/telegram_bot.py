@@ -843,7 +843,10 @@ Bot is now monitoring the market.
                 f"<b>Winners:</b> {stats['wins']} | <b>Losers:</b> {stats['losses']} "
                 f"| <b>Win rate:</b> {wr:.1f}% {perf}",
                 f"<b>Realized:</b> {money(stats['total_pnl_base'])} "
-                f"<i>(net of {ccy}{stats['total_commission_base']:,.2f} commission)</i>",
+                # IBKR's realizedPNL is already net of BOTH legs' commissions
+                # (avgCost carries the entry fee); the per-report commission
+                # field is only the exit leg, so don't present it as the total.
+                "<i>(IBKR realized P&L, after entry and exit commissions)</i>",
             ]
             if stats["wins"] and stats["losses"] and stats["payoff"]:
                 lines.append(

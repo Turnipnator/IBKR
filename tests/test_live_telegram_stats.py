@@ -207,6 +207,8 @@ class TestStatsCommand:
         assert "Winners:</b> 2 | <b>Losers:</b> 2" in msg
         assert "Win rate:</b> 50.0%" in msg
         assert "Realized:</b> +£40.00" in msg
+        assert "after entry and exit commissions" in msg
+        assert "net of" not in msg      # exit-leg commission is not the total fee
         assert "Best:</b> AIGS +£39.26" in msg
         assert "Worst:</b> AIGI -£16.25" in msg
         assert "Open positions:</b> 4" in msg
