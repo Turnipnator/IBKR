@@ -4,6 +4,80 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-15 — Pre-registered long-history and UK dual momentum tests (attempts 5–7)
+
+**Question.** Dual momentum's rules could not be re-tested on 2008–2026. Do the same ideas, unchanged, show timing
+value on data this project had not used: 80 years of US history (1928–2007) and a UK investor's version (2008–2026)?
+
+### 1. Decomposition
+- Q1 Can the rules be replicated on long index data with trustworthy bond returns, and on UK UCITS lines with dividends?
+- Q2 Does the timing beat random timing of the same holdings at a batch-adjusted threshold (0.714%)?
+- Q3 Does it beat the relevant 60/40?
+- Q4 Is a pass robust to the known weakness of monthly-average yields?
+
+### 2. Competing hypotheses
+- **H5** US absolute momentum (stocks vs T-bills over 12 months, bonds when out) has timing value over 1928–2007.
+- **H6** Faber's 10-month rule on US stocks has timing value over 1928–2007.
+- **H7** UK dual momentum (ISF vs IWRD vs IGLT, UK cash hurdle) has timing value over 2008–2026.
+- **H0** for each: timing indistinguishable from random; a passive 60/40 as good or better.
+
+### 3. Method
+Pre-registered (`research/2026-09-15_long_history_uk/`: COMMON.md and three cards, commit `c2eaa21`; code `6fad2a8`).
+Part A: Ken French US market total return and T-bills (monthly for signals, daily for returns), 10-year Treasury
+returns built from FRED LTGOVTBD/GS10 yields and checked against Shiller's bond returns (annual correlation 0.965),
+next-day-close execution, 0.07% commission + 5 bps per order. Part B: IBKR adjusted bars for ISF/IWRD/IGLT (dividends
+checked), FRED UK 3-month rate hurdle, the GBP cash-account simulator with IBKR UK commission. Both: circular-shift
+random-timing nulls (1,000 runs at 5 and 15 bps), neighbouring lookbacks, four sub-periods.
+
+### 4. Evidence
+
+| | Window | CAGR | Sharpe | Worst fall | Random runs ≥ | Verdict |
+|---|---|---|---|---|---|---|
+| 60/40 stocks/bonds | 1928–2007 | +8.4% | 0.50 | −62.1% | — | benchmark |
+| **US absolute momentum** | 1928–2007 | **+11.0%** | **0.64** | −46.0% | **0.3%** | **Pass, all 7 boxes** |
+| US 10-month trend timing | 1928–2007 | +9.1% | 0.48 | −47.7% | 2.5% | Fail (1, 2, 5) |
+| 60/40 IWRD/IGLT | 2008–2026 | +7.7% | 0.82 | −19.4% | — | benchmark |
+| UK dual momentum | 2008–2026 | +6.6% | 0.57 | −18.6% | 24.0% | Fail (1, 2, 5) |
+
+(Part A Sharpe ratios are over T-bills; Part B at a 0% risk-free rate.)
+
+- **E1 fidelity (HIGH):** two signal implementations agree on every month in both parts; bond data check 0.965;
+  UK adjusted/raw ratios 0.49–0.62 confirm dividends are included.
+- **E2 absolute momentum (MEDIUM–HIGH):** passes every box. Post-registration robustness (`robustness_a.py`, commit
+  `f2eaf5a`): month-end yields from 1962 → 0.1% of random runs as good; no bond credit in the first month after a
+  switch → 0.3%; both → 0.1%. The monthly-average-yield concern does not explain it. With T-bills instead of bonds
+  as the safe asset: Sharpe 0.52, 2.3% — timing still beats 97.7% of random runs, but part of the pass comes from
+  bonds rallying while stocks trend down.
+- **E3 where it earned it (HIGH):** long bear markets — 1929–32 stocks −84% vs −30%; 1973–74 −48% vs −8%; 2000–02
+  −49% vs +2%. Fast crashes much less: 1987 −33% vs −21%. Worst fall still −46%.
+- **E4 trend timing (MEDIUM):** beat 97.5% of random runs; not significant at 0.714% and Sharpe just under 60/40.
+- **E5 UK dual momentum (HIGH):** timing no better than chance; world/gilts 60/40 better on return and Sharpe.
+
+### 5. Self-critique
+- *Literature overlap.* Trend and absolute-momentum rules on US stocks have been published over periods including
+  1928–2007 (Hurst, Ooi & Pedersen back to 1880). The pass confirms known evidence more than it discovers an edge.
+- *Regime dependence.* Its gains came from slow bear markets and from bonds hedging stocks. In 2008–2026 the related
+  dual-momentum rule showed no timing value (attempt 3), and 2022 showed bonds and stocks falling together.
+- *Implementation gap.* Index returns in USD before fund fees and taxes; the UCITS version for a GBP account is untested,
+  and the only GBP-based test in this batch (attempt 7, a different rule) failed.
+- *Multiple testing.* Seven registered attempts; the 0.714% threshold accounts for this batch. Box 1 at 0.3% is below
+  it, but with 1,000 runs the estimate is coarse (3 runs).
+- *Robustness was post hoc.* Its design was committed before its results were seen, and it cannot change the verdict.
+
+### 6. Conclusion
+- **Most supported:** H5 holds on 1928–2007: US absolute momentum with bonds as the safe asset showed real timing value
+  and beat 60/40 on return and Sharpe, mainly by sidestepping long bear markets. H0 holds for H6 and H7.
+- **Not shown:** that it works in the 2008–2026 regime, in GBP, through UCITS funds, or after fees and taxes.
+
+### 7. Suggested actions (user decision)
+1. Under card 5's §7, register a new card testing a UCITS version on data not yet used. Honest candidates: (a) a
+   forward test at minimum size, judged on implementation, which will take years to say anything about profit;
+   (b) the same rule on other countries' long index histories not yet examined, to test whether it generalises beyond
+   the US.
+2. Do not run it live on the strength of this backtest alone.
+
+---
+
 ## 2026-09-15 — Pre-registered monthly allocation tests (attempts 2–4)
 
 **Question.** After the live configuration failed out of sample, do three published, low-turnover

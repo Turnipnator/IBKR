@@ -1,0 +1,13 @@
+R0 registered data                                   Sharpe 0.64 CAGR +11.0% worst fall -46.0% | 0.3% of random runs >= (median 0.36, 95th 0.51) | 60/40 Sharpe 0.50 | blocks +352%, +823%, +831%, +1016%
+R1 month-end yields from 1962                        Sharpe 0.65 CAGR +11.1% worst fall -46.0% | 0.1% of random runs >= (median 0.36, 95th 0.51) | 60/40 Sharpe 0.50 | blocks +352%, +821%, +870%, +1022%
+R2 no bond return in first month after switching     Sharpe 0.64 CAGR +11.0% worst fall -44.4% | 0.3% of random runs >= (median 0.36, 95th 0.51) | 60/40 Sharpe 0.50 | blocks +366%, +813%, +781%, +1014%
+R3 R1 + R2                                           Sharpe 0.64 CAGR +11.0% worst fall -44.4% | 0.1% of random runs >= (median 0.36, 95th 0.51) | 60/40 Sharpe 0.50 | blocks +366%, +828%, +813%, +959%
+R4 T-bills as the safe asset                         Sharpe 0.52 CAGR +9.5% worst fall -47.1% | 2.3% of random runs >= (median 0.33, 95th 0.47) | 60/40 Sharpe 0.50 | blocks +281%, +646%, +526%, +681%
+1929-32 crash  stocks -84.0% | absmom -30.3% | T-bill version -31.1% | out of stocks 31/34 months
+1937-38        stocks -50.9% | absmom -22.0% | T-bill version -24.0% | out of stocks 6/13 months
+1946-49        stocks -21.6% | absmom -20.0% | T-bill version -22.6% | out of stocks 16/38 months
+1968-70        stocks -36.8% | absmom -12.8% | T-bill version -4.7% | out of stocks 11/19 months
+1973-74        stocks -48.2% | absmom -8.0% | T-bill version +2.0% | out of stocks 20/22 months
+1987 crash     stocks -33.1% | absmom -21.1% | T-bill version -24.3% | out of stocks 2/5 months
+2000-02        stocks -49.2% | absmom +2.2% | T-bill version -13.7% | out of stocks 23/32 months
+months in stocks 659/960; month-end-yield bond months 551; runtime 6s

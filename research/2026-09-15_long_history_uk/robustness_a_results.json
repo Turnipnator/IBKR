@@ -1,0 +1,154 @@
+{
+ "run_utc": "2026-09-15 20:48:07",
+ "month_end_yield_months": 551,
+ "months_in_stocks": 659,
+ "months": 960,
+ "variants": [
+  {
+   "variant": "R0 registered data",
+   "sharpe": 0.6435633907981636,
+   "cagr": 0.11036626310769937,
+   "maxdd": -0.46015177045033473,
+   "blocks": [
+    3.516190514189452,
+    8.232711932600134,
+    8.310664499685407,
+    10.164646447693498
+   ],
+   "share_at_least_as_good": 0.003,
+   "null_sharpe_p50": 0.36071112378819514,
+   "null_sharpe_p95": 0.508969236493377,
+   "null_cagr_p50": 0.07910546959705145,
+   "bench_sharpe": 0.5016801455367562,
+   "bench_cagr": 0.08415986544514475,
+   "bench_maxdd": -0.6206214666197292
+  },
+  {
+   "variant": "R1 month-end yields from 1962",
+   "sharpe": 0.6478731985944088,
+   "cagr": 0.11097061939030306,
+   "maxdd": -0.46015177045033473,
+   "blocks": [
+    3.516190514189452,
+    8.212025948613405,
+    8.70155816001978,
+    10.21661011132839
+   ],
+   "share_at_least_as_good": 0.001,
+   "null_sharpe_p50": 0.36093793642644223,
+   "null_sharpe_p95": 0.5138736759481642,
+   "null_cagr_p50": 0.0792169693866338,
+   "bench_sharpe": 0.5019655030550376,
+   "bench_cagr": 0.08417965350532608,
+   "bench_maxdd": -0.6206214666197292
+  },
+  {
+   "variant": "R2 no bond return in first month after switching",
+   "sharpe": 0.6399069762021938,
+   "cagr": 0.10986411477483249,
+   "maxdd": -0.44419076579510197,
+   "blocks": [
+    3.661552311593921,
+    8.132150665300664,
+    7.811287072079809,
+    10.144740476332961
+   ],
+   "share_at_least_as_good": 0.003,
+   "null_sharpe_p50": 0.35638074888431653,
+   "null_sharpe_p95": 0.5099360607708341,
+   "null_cagr_p50": 0.07886657900785876,
+   "bench_sharpe": 0.5016801455367562,
+   "bench_cagr": 0.08415986544514475,
+   "bench_maxdd": -0.6206214666197292
+  },
+  {
+   "variant": "R3 R1 + R2",
+   "sharpe": 0.6396580837914985,
+   "cagr": 0.10986212355486913,
+   "maxdd": -0.44419076579510197,
+   "blocks": [
+    3.661552311593921,
+    8.275061454445757,
+    8.127358795855002,
+    9.59151613693556
+   ],
+   "share_at_least_as_good": 0.001,
+   "null_sharpe_p50": 0.35631555995539466,
+   "null_sharpe_p95": 0.513413591086959,
+   "null_cagr_p50": 0.07864062531726401,
+   "bench_sharpe": 0.5019655030550376,
+   "bench_cagr": 0.08417965350532608,
+   "bench_maxdd": -0.6206214666197292
+  },
+  {
+   "variant": "R4 T-bills as the safe asset",
+   "sharpe": 0.5244267010216407,
+   "cagr": 0.09470711679701305,
+   "maxdd": -0.4711251557914956,
+   "blocks": [
+    2.81334377569399,
+    6.464449842298947,
+    5.261183502819184,
+    6.8082255079168155
+   ],
+   "share_at_least_as_good": 0.023,
+   "null_sharpe_p50": 0.3266159252330185,
+   "null_sharpe_p95": 0.46963203866920966,
+   "null_cagr_p50": 0.07413127865730684,
+   "bench_sharpe": 0.5016801455367562,
+   "bench_cagr": 0.08415986544514475,
+   "bench_maxdd": -0.6206214666197292
+  }
+ ],
+ "crashes": {
+  "1929-32 crash": {
+   "stocks": -0.8401594971379382,
+   "absmom_registered": -0.30326011479721293,
+   "absmom_bills_safe": -0.31089353521726326,
+   "months_in_bonds": 31,
+   "months": 34
+  },
+  "1937-38": {
+   "stocks": -0.5092179500466771,
+   "absmom_registered": -0.2198225024673489,
+   "absmom_bills_safe": -0.24027360092816086,
+   "months_in_bonds": 6,
+   "months": 13
+  },
+  "1946-49": {
+   "stocks": -0.21633653222368165,
+   "absmom_registered": -0.2002468801389642,
+   "absmom_bills_safe": -0.22640437385064527,
+   "months_in_bonds": 16,
+   "months": 38
+  },
+  "1968-70": {
+   "stocks": -0.36819611766251725,
+   "absmom_registered": -0.1279589792964212,
+   "absmom_bills_safe": -0.04747415155776369,
+   "months_in_bonds": 11,
+   "months": 19
+  },
+  "1973-74": {
+   "stocks": -0.4815948240000786,
+   "absmom_registered": -0.07960343691240968,
+   "absmom_bills_safe": 0.020433774448530784,
+   "months_in_bonds": 20,
+   "months": 22
+  },
+  "1987 crash": {
+   "stocks": -0.33114245552627086,
+   "absmom_registered": -0.21062706984138135,
+   "absmom_bills_safe": -0.24337575394692934,
+   "months_in_bonds": 2,
+   "months": 5
+  },
+  "2000-02": {
+   "stocks": -0.4922560493880207,
+   "absmom_registered": 0.022400772297238136,
+   "absmom_bills_safe": -0.13732973475198185,
+   "months_in_bonds": 23,
+   "months": 32
+  }
+ }
+}

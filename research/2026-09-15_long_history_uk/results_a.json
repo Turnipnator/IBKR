@@ -1,0 +1,223 @@
+{
+ "git_commit": "6fad2a8",
+ "run_utc": "2026-09-15 20:45:02",
+ "withdrawn": false,
+ "data_check": {
+  "shiller_column": "Monthly Total Bond Returns",
+  "bond_months_mine": 960,
+  "bond_months_shiller": 960,
+  "annual_corr": 0.9651512385809231,
+  "passed": true
+ },
+ "fidelity": {
+  "absmom": {
+   "disagree": 0,
+   "months": 1201
+  },
+  "trend": {
+   "disagree": 0,
+   "months": 1201
+  }
+ },
+ "threshold": 0.0071428571428571435,
+ "n_null": 1000,
+ "window": {
+  "first_signal": "1927-12",
+  "last_signal": "2007-11",
+  "months": 960,
+  "first_trade": "1928-01-03",
+  "valued_to": "2007-12-31",
+  "years": 79.9917864476386
+ },
+ "benchmark_6040": {
+  "sharpe": 0.5016801455367562,
+  "cagr": 0.08415986544514475,
+  "maxdd": -0.6206214666197292,
+  "vol": 0.10036964471117481,
+  "end": 64147.22083481626
+ },
+ "stocks_buy_hold": {
+  "sharpe": 0.4217660964332968,
+  "cagr": 0.09689241487351419,
+  "maxdd": -0.8407399476860211,
+  "vol": 0.16904616272235207,
+  "end": 163227.29166992634
+ },
+ "verdicts": {
+  "absmom": {
+   "passed": true,
+   "boxes": {
+    "1 beats random timing": {
+     "ok": true,
+     "detail": "0.3% of 1000 random runs have Sharpe >= 0.64 (need <= 0.714%)"
+    },
+    "2 beats 60/40": {
+     "ok": true,
+     "detail": "Sharpe 0.64 vs 0.50; worst fall -46.0% vs -62.1%; CAGR +11.0% vs +8.4%"
+    },
+    "3 decisions and switches": {
+     "ok": true,
+     "detail": "960 monthly decisions, 70 switches"
+    },
+    "4 sub-periods": {
+     "ok": true,
+     "detail": "4 of 4 positive: +351.6%, +823.3%, +831.1%, +1016.5%"
+    },
+    "5 stress slippage": {
+     "ok": true,
+     "detail": "0.3% of random runs at 15 bps have Sharpe >= 0.63"
+    },
+    "6 neighbours": {
+     "ok": true,
+     "detail": "neighbour Sharpe 11: 0.67, 13: 0.59 vs random median 0.36"
+    },
+    "7 fidelity and data": {
+     "ok": true,
+     "detail": "0 signal disagreements; bond check corr 0.965"
+    }
+   },
+   "base": {
+    "sharpe": 0.6435633907981636,
+    "cagr": 0.11036626310769937,
+    "maxdd": -0.46015177045033473,
+    "vol": 0.11854343199492316,
+    "end": 433438.207875236,
+    "switches": 70,
+    "orders": 141,
+    "blocks": [
+     3.516190514189452,
+     8.232711932600134,
+     8.310664499685407,
+     10.164646447693498
+    ],
+    "kind": "base",
+    "strat": "absmom",
+    "slip": 5.0,
+    "seed": null,
+    "param": 12
+   },
+   "stress": {
+    "sharpe": 0.6284678565648494,
+    "cagr": 0.10840412313367032,
+    "maxdd": -0.46446794492756516,
+    "vol": 0.11858326828891949,
+    "end": 376256.04020209354,
+    "switches": 70,
+    "orders": 141,
+    "blocks": [
+     3.351603070669511,
+     7.833953923523389,
+     8.034567969674507,
+     9.833572318332429
+    ],
+    "kind": "base",
+    "strat": "absmom",
+    "slip": 15.0,
+    "seed": null,
+    "param": 12
+   },
+   "null_sharpe": {
+    "p5": 0.22964507115571584,
+    "p50": 0.36071112378819514,
+    "p95": 0.508969236493377
+   },
+   "null_cagr": {
+    "p5": 0.06002503802100691,
+    "p50": 0.07910546959705145,
+    "p95": 0.09982207102670644
+   },
+   "neighbours": {
+    "11": 0.6747765440173465,
+    "13": 0.5923051678431115
+   }
+  },
+  "trend": {
+   "passed": false,
+   "boxes": {
+    "1 beats random timing": {
+     "ok": false,
+     "detail": "2.5% of 1000 random runs have Sharpe >= 0.48 (need <= 0.714%)"
+    },
+    "2 beats 60/40": {
+     "ok": false,
+     "detail": "Sharpe 0.48 vs 0.50; worst fall -47.7% vs -62.1%; CAGR +9.1% vs +8.4%"
+    },
+    "3 decisions and switches": {
+     "ok": true,
+     "detail": "960 monthly decisions, 116 switches"
+    },
+    "4 sub-periods": {
+     "ok": true,
+     "detail": "4 of 4 positive: +164.9%, +764.6%, +507.6%, +636.0%"
+    },
+    "5 stress slippage": {
+     "ok": false,
+     "detail": "2.5% of random runs at 15 bps have Sharpe >= 0.45"
+    },
+    "6 neighbours": {
+     "ok": true,
+     "detail": "neighbour Sharpe 9: 0.43, 11: 0.50 vs random median 0.32"
+    },
+    "7 fidelity and data": {
+     "ok": true,
+     "detail": "0 signal disagreements; bond check corr 0.965"
+    }
+   },
+   "base": {
+    "sharpe": 0.4772592368754178,
+    "cagr": 0.09052230913503778,
+    "maxdd": -0.4773749676969016,
+    "vol": 0.12322966727750446,
+    "end": 102436.62146111706,
+    "switches": 116,
+    "orders": 233,
+    "blocks": [
+     1.6493532398911674,
+     7.646116870424084,
+     5.07587048704682,
+     6.360134822752038
+    ],
+    "kind": "base",
+    "strat": "trend",
+    "slip": 5.0,
+    "seed": null,
+    "param": 10
+   },
+   "stress": {
+    "sharpe": 0.4533531127861418,
+    "cagr": 0.08733967539308019,
+    "maxdd": -0.47946839652590456,
+    "vol": 0.12329883545652763,
+    "end": 81081.19077938423,
+    "switches": 116,
+    "orders": 233,
+    "blocks": [
+     1.502080981897735,
+     7.140939469227883,
+     4.686529209232658,
+     5.9999825351383524
+    ],
+    "kind": "base",
+    "strat": "trend",
+    "slip": 15.0,
+    "seed": null,
+    "param": 10
+   },
+   "null_sharpe": {
+    "p5": 0.2170082173796619,
+    "p50": 0.3231551895357132,
+    "p95": 0.45070071038094556
+   },
+   "null_cagr": {
+    "p5": 0.05804845457381247,
+    "p50": 0.07400917323542333,
+    "p95": 0.09252138679834225
+   },
+   "neighbours": {
+    "9": 0.432892011764312,
+    "11": 0.49960952886324517
+   }
+  }
+ },
+ "runtime_s": 2.726384162902832
+}

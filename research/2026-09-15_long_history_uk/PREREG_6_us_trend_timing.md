@@ -80,6 +80,23 @@ Attempts 5–7 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-15, code `6fad2a8`, rules `c2eaa21`; 1,000 random-timing runs per slippage level. Window: signals 1927-12 → 2007-11 (960 months), trades from 1928-01-03, valued to 2007-12-31 (21,171 trading days, 80.0 years).
+- **Data check:** calendar-year returns of the constructed bond series and Shiller's "Monthly Total Bond Returns" correlate 0.965 over 1928–2007 (960 months each). Passed.
+- **Headline:** CAGR +9.1% a year, Sharpe 0.48 (daily returns over T-bills), worst fall −47.7%, volatility
+  12.3%; 116 switches, 233 orders. 60/40 benchmark: CAGR +8.4%, Sharpe 0.50, worst fall −62.1%. Median
+  random-timing run: CAGR +7.4%.
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random timing | ≤ 0.714% of runs at least as good | 2.5% (random Sharpe median 0.32, 95th percentile 0.45) | ✗ |
+  | 2 Beats 60/40 | Sharpe above 0.50, or worst fall ≤ 31.1% with CAGR ≥ 6.4% | Sharpe 0.48; worst fall −47.7%; CAGR +9.1% | ✗ |
+  | 3 Decisions and switches | ≥ 100 months and ≥ 15 switches | 960 months, 116 switches | ✓ |
+  | 4 Sub-periods | at least 3 of 4 positive | 4 of 4 (+165%, +765%, +508%, +636%) | ✓ |
+  | 5 Stress slippage | ≤ 0.714% at 15 bps | 2.5% | ✗ |
+  | 6 Neighbours | Sharpe above the random median (0.32) | 9 months 0.43; 11 months 0.50 | ✓ |
+  | 7 Fidelity and data | no disagreements; data check passes | 0 in 1,201 months; bond check 0.965 | ✓ |
+
+- **Smoke run:** a 5-seed smoke run preceded the registered run to catch crashes; 5 random runs cannot resolve a 0.714% threshold, so its ticks are not results. No code changed between the two runs.
+- **Decision:** **Fail** (boxes 1, 2 and 5). Not re-tuned on this data. It beat 97.5% of randomly timed runs,
+  so the timing did something, but not enough for the batch threshold, and its Sharpe ratio fell just short of 60/40's.

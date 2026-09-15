@@ -124,9 +124,9 @@ large edge.
 | 2 | 2026-09-15 | Monthly trend timing, 5 asset classes (`2026-09-15_monthly_allocation/PREREG_2_gtaa.md`) | Fail (boxes 1, 2, 3, 5) |
 | 3 | 2026-09-15 | Dual momentum (`2026-09-15_monthly_allocation/PREREG_3_dual_momentum.md`) | Fail (boxes 1, 2, 5) |
 | 4 | 2026-09-15 | Volatility-targeted 60/40 (`2026-09-15_monthly_allocation/PREREG_4_vol_target_6040.md`) | Fail (boxes 1, 5) |
-| 5 | 2026-09-15 | US absolute momentum, 1928–2007 (`2026-09-15_long_history_uk/PREREG_5_us_absolute_momentum.md`) | Registered, not yet run |
-| 6 | 2026-09-15 | US 10-month trend timing, 1928–2007 (`2026-09-15_long_history_uk/PREREG_6_us_trend_timing.md`) | Registered, not yet run |
-| 7 | 2026-09-15 | UK dual momentum, 2008–2026 (`2026-09-15_long_history_uk/PREREG_7_uk_dual_momentum.md`) | Registered, not yet run |
+| 5 | 2026-09-15 | US absolute momentum, 1928–2007 (`2026-09-15_long_history_uk/PREREG_5_us_absolute_momentum.md`) | **Pass** (all 7 boxes); next step is a UCITS card on unused data |
+| 6 | 2026-09-15 | US 10-month trend timing, 1928–2007 (`2026-09-15_long_history_uk/PREREG_6_us_trend_timing.md`) | Fail (boxes 1, 2, 5) |
+| 7 | 2026-09-15 | UK dual momentum, 2008–2026 (`2026-09-15_long_history_uk/PREREG_7_uk_dual_momentum.md`) | Fail (boxes 1, 2, 5) |
 
 ### Data already seen
 
@@ -137,6 +137,8 @@ large edge.
 | 2023-09 → 2026-08 | 23 UCITS lines | TSMOM + CSMOM, class caps 40–100%, 3–5 slots | `2026-08-28_classcap/` |
 | 2008-01 → 2026-09 | 23 US-ETF proxies of the UCITS lines | TSMOM + CSMOM, thresholds 0.3–0.7, 2–4×ATR, 3–5 slots, random-pick nulls | `2026-09-15_oos/` |
 | 2008-05 → 2026-08 | SPY, EFA, IEF, VNQ, GSG, VEU, AGG, BIL | monthly trend timing (9–11 month averages), dual momentum (11–13 month lookbacks), volatility-targeted 60/40 (8–12%, 10–42 days), static 60/40, random-timing nulls | `2026-09-15_monthly_allocation/` |
+| 1928-01 → 2007-12 | US stock market (Ken French), 10-year Treasuries built from FRED yields, T-bills | absolute momentum (11–13 months; bonds, T-bills as safe asset in robustness), 10-month trend timing (9–11), 60/40, random-timing nulls | `2026-09-15_long_history_uk/` |
+| 2008-01 → 2026-08 | ISF, IWRD, IGLT, UK 3-month interbank rate | UK dual momentum (11–13 months), 60/40 IWRD/IGLT, ISF buy-and-hold, random-timing nulls | `2026-09-15_long_history_uk/` |
 
 IBKR serves at most 20 years of daily bars, so these proxies have no history before 2006.
 For momentum or trend rules on this universe, every available period has been looked at.

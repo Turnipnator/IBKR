@@ -95,6 +95,27 @@ Attempts 5–7 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-15, code `6fad2a8`, rules `c2eaa21`; 1,000 random-timing runs per slippage
+  level. Window: signals 2007-12-31 → 2026-07-31 (224 months), trades from 2008-01-02, valued to 2026-08-28.
+- **Data check:** adjusted ÷ raw close on the first bar: ISF 0.49, IWRD 0.62, IGLT 0.62. Passed. The UK rate's last
+  observation is 2026-01; later months repeat it.
+- **Holdings by month:** IWRD 106, IGLT 62, ISF 56; 56 switches; 181 orders; fees 0.43% of account value a year.
+- **Headline:** CAGR +6.6% a year, Sharpe 0.57, worst fall −18.6%, volatility 12.5%; £4,710.57 → £15,529. 60/40
+  IWRD/IGLT benchmark: CAGR +7.7%, Sharpe 0.82, worst fall −19.4%, £18,853. ISF buy-and-hold (reported, not a box):
+  CAGR +6.6%, Sharpe 0.44, worst fall −43.2%. Median random-timing run: CAGR +6.0%.
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random timing | ≤ 0.714% of runs at least as good | 24.0% (random Sharpe median 0.45, 95th percentile 0.70) | ✗ |
+  | 2 Beats 60/40 | Sharpe above 0.82, or worst fall ≤ 9.7% with CAGR ≥ 5.7% | Sharpe 0.57; worst fall −18.6%; CAGR +6.6% | ✗ |
+  | 3 Decisions and switches | ≥ 100 months and ≥ 15 switches | 224 months, 56 switches | ✓ |
+  | 4 Sub-periods | at least 3 of 4 positive | 4 of 4 (+10.4%, +71.8%, +17.3%, +48.3%) | ✓ |
+  | 5 Stress slippage | ≤ 0.714% at 15 bps | 25.1% | ✗ |
+  | 6 Neighbours | Sharpe above the random median (0.45) | 11 months 0.66; 13 months 0.66 | ✓ |
+  | 7 Fidelity and data | no disagreements; data check passes | 0 in 239 months; ratios as above | ✓ |
+
+- **Smoke run:** a 5-seed smoke run preceded the registered run to catch crashes; 5 random runs cannot resolve a 0.714% threshold, so its ticks are not results. No code changed between the two runs.
+- **Decision:** **Fail** (boxes 1, 2 and 5). Not re-tuned on this data. Its timing was no better than chance — a
+  quarter of randomly timed runs did at least as well — and a plain 60/40 of world shares and gilts beat it on both
+  return and Sharpe ratio.

@@ -1,0 +1,27 @@
+data check: {'shiller_column': 'Monthly Total Bond Returns', 'bond_months_mine': 960, 'bond_months_shiller': 960, 'annual_corr': 0.9651512385809231, 'passed': True}
+fidelity: {'absmom': {'disagree': 0, 'months': 1201}, 'trend': {'disagree': 0, 'months': 1201}}
+window: signals 1927-12 -> 2007-11 (960), trades from 1928-01-03, valued to 2007-12-31, 21171 trading days, 80.0 years
+one run 0.006s; 28 tasks on 3 processes
+simulations done 1s
+
+60/40 benchmark: CAGR +8.4% Sharpe 0.50 worst fall -62.1% | stocks buy-and-hold: CAGR +9.7% Sharpe 0.42 worst fall -84.1%
+
+=== absmom: PASS ===  CAGR +11.0% Sharpe 0.64 worst fall -46.0% vol 11.9% switches 70 | random Sharpe p5/50/95 0.23/0.30/0.41 | random CAGR median +7.1%
+  [x] 1 beats random timing: 0.0% of 5 random runs have Sharpe >= 0.64 (need <= 0.714%)
+  [x] 2 beats 60/40: Sharpe 0.64 vs 0.50; worst fall -46.0% vs -62.1%; CAGR +11.0% vs +8.4%
+  [x] 3 decisions and switches: 960 monthly decisions, 70 switches
+  [x] 4 sub-periods: 4 of 4 positive: +351.6%, +823.3%, +831.1%, +1016.5%
+  [x] 5 stress slippage: 0.0% of random runs at 15 bps have Sharpe >= 0.63
+  [x] 6 neighbours: neighbour Sharpe 11: 0.67, 13: 0.59 vs random median 0.30
+  [x] 7 fidelity and data: 0 signal disagreements; bond check corr 0.965
+
+=== trend: FAIL ===  CAGR +9.1% Sharpe 0.48 worst fall -47.7% vol 12.3% switches 116 | random Sharpe p5/50/95 0.22/0.23/0.33 | random CAGR median +6.0%
+  [x] 1 beats random timing: 0.0% of 5 random runs have Sharpe >= 0.48 (need <= 0.714%)
+  [ ] 2 beats 60/40: Sharpe 0.48 vs 0.50; worst fall -47.7% vs -62.1%; CAGR +9.1% vs +8.4%
+  [x] 3 decisions and switches: 960 monthly decisions, 116 switches
+  [x] 4 sub-periods: 4 of 4 positive: +164.9%, +764.6%, +507.6%, +636.0%
+  [x] 5 stress slippage: 0.0% of random runs at 15 bps have Sharpe >= 0.45
+  [x] 6 neighbours: neighbour Sharpe 9: 0.43, 11: 0.50 vs random median 0.23
+  [x] 7 fidelity and data: 0 signal disagreements; bond check corr 0.965
+
+runtime 1s

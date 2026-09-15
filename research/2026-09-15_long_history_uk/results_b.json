@@ -1,0 +1,169 @@
+{
+ "git_commit": "6fad2a8",
+ "run_utc": "2026-09-15 20:45:11",
+ "withdrawn": false,
+ "data_check": {
+  "first_bar_adjusted_over_raw": {
+   "ISF": 0.4864455782312925,
+   "IWRD": 0.6197137280416396,
+   "IGLT": 0.6158808933002482
+  },
+  "passed": true,
+  "uk_rate_last_observation": "2026-01"
+ },
+ "fidelity": {
+  "disagree": 0,
+  "months": 239
+ },
+ "threshold": 0.0071428571428571435,
+ "n_null": 1000,
+ "window": {
+  "first_signal": "2007-12-31",
+  "last_signal": "2026-07-31",
+  "months": 224,
+  "first_trade": "2008-01-02",
+  "valued_to": "2026-08-28"
+ },
+ "benchmark_6040": {
+  "sharpe": 0.8151027435923628,
+  "cagr": 0.07718458768448655,
+  "years": 18.652977412731005,
+  "maxdd": -0.19384994085960794,
+  "vol": 0.09668934877489968,
+  "end_nlv": 18853.00334125,
+  "orders": 41,
+  "fees": 123.0,
+  "fee_pct_yr": 0.00066097031909151,
+  "blocks": [
+   0.2791434080695119,
+   0.6719242768647162,
+   0.49671426209126723,
+   0.25035214815195483
+  ],
+  "kind": "base",
+  "strat": "bench6040",
+  "slip": 5.0,
+  "seed": null,
+  "param": null
+ },
+ "isf_buy_hold": {
+  "sharpe": 0.44355832768016173,
+  "cagr": 0.06561252907745163,
+  "years": 18.652977412731005,
+  "maxdd": -0.43182802461365566,
+  "vol": 0.1791191589183266,
+  "end_nlv": 15412.8488554,
+  "orders": 2,
+  "fees": 6.0,
+  "fee_pct_yr": 4.404779322743101e-05,
+  "blocks": [
+   0.0431352162052574,
+   0.48270092505068907,
+   0.21818018641671544,
+   0.7366158492095942
+  ],
+  "kind": "base",
+  "strat": "isf_bh",
+  "slip": 5.0,
+  "seed": null,
+  "param": null
+ },
+ "verdict": {
+  "passed": false,
+  "boxes": {
+   "1 beats random timing": {
+    "ok": false,
+    "detail": "24.0% of 1000 random runs have Sharpe >= 0.57 (need <= 0.714%)"
+   },
+   "2 beats 60/40": {
+    "ok": false,
+    "detail": "Sharpe 0.57 vs 0.82; worst fall -18.6% vs -19.4%; CAGR +6.6% vs +7.7%"
+   },
+   "3 decisions and switches": {
+    "ok": true,
+    "detail": "224 monthly decisions, 56 switches"
+   },
+   "4 sub-periods": {
+    "ok": true,
+    "detail": "4 of 4 positive: +10.4%, +71.8%, +17.3%, +48.3%"
+   },
+   "5 stress slippage": {
+    "ok": false,
+    "detail": "25.1% of random runs at 15 bps have Sharpe >= 0.52"
+   },
+   "6 neighbours": {
+    "ok": true,
+    "detail": "neighbour Sharpe 11: 0.66, 13: 0.66 vs random median 0.45"
+   },
+   "7 fidelity and data": {
+    "ok": true,
+    "detail": "0 signal disagreements; adjusted/raw ratios ISF 0.49, IWRD 0.62, IGLT 0.62"
+   }
+  },
+  "base": {
+   "sharpe": 0.5717283163295586,
+   "cagr": 0.06604063962783346,
+   "years": 18.652977412731005,
+   "maxdd": -0.18578340714853891,
+   "vol": 0.1252777437951786,
+   "end_nlv": 15528.760863323549,
+   "orders": 181,
+   "fees": 660.3218729264752,
+   "fee_pct_yr": 0.004311821253889411,
+   "blocks": [
+    0.10368033789966002,
+    0.7175645547586547,
+    0.17280128249939963,
+    0.48279984951539956
+   ],
+   "kind": "base",
+   "strat": "dm",
+   "slip": 5.0,
+   "seed": null,
+   "param": 12
+  },
+  "stress": {
+   "sharpe": 0.5216232933935211,
+   "cagr": 0.05934824586535559,
+   "years": 18.652977412731005,
+   "maxdd": -0.18747343748804346,
+   "vol": 0.1252715853624032,
+   "end_nlv": 13807.680637095316,
+   "orders": 187,
+   "fees": 650.9562053046749,
+   "fee_pct_yr": 0.00457043826641804,
+   "blocks": [
+    0.06815921856590479,
+    0.6646595777738615,
+    0.14194511166928847,
+    0.4435791974178067
+   ],
+   "kind": "base",
+   "strat": "dm",
+   "slip": 15.0,
+   "seed": null,
+   "param": 12
+  },
+  "null_sharpe": {
+   "p5": 0.25385878822271557,
+   "p50": 0.4528499848097116,
+   "p95": 0.7008254590699526
+  },
+  "null_cagr": {
+   "p5": 0.028091733070100267,
+   "p50": 0.05999940700836115,
+   "p95": 0.09450995655525118
+  },
+  "neighbours": {
+   "11": 0.6636618719061731,
+   "13": 0.6596153075008175
+  },
+  "holdings_by_month": {
+   "ISF": 56,
+   "IWRD": 106,
+   "IGLT": 62
+  },
+  "switches": 56
+ },
+ "runtime_s": 7.6918110847473145
+}
