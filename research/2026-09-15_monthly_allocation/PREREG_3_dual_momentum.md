@@ -107,6 +107,24 @@ Attempts 2–4 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-15, code `05f52b7`, rules `62c93ac`; 1,000 random-timing runs per slippage level. Window: signals 2008-05-30 → 2026-07-31 (219 months), trades from 2008-06-02, valued to 2026-08-31. IEF spliced with its ARCA-listed series before 2017-08-03 (overlap return correlation 0.999).
+- **Ex-US proxy used:** VEU (IBKR history from 2007-03-08; ACWX not needed).
+- **Headline:** CAGR +10.2% a year, Sharpe 0.67, worst fall −26.2%, volatility 16.5%; £4,710.57 → £27,800;
+  97 orders, fees 0.21% of account value a year. Post-publication segment from 2014-01 (reported, not a box):
+  CAGR +9.1%. 60/40 benchmark: CAGR +10.8%, Sharpe 0.93, worst fall −15.8%.
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random timing | ≤ 1.25% of runs at least as good | 35.7% (random Sharpe median 0.65, 95th percentile 0.79) | ✗ |
+  | 2 Beats 60/40 | Sharpe above 0.93, or worst fall ≤ 7.9% with CAGR ≥ 8.8% | Sharpe 0.67; worst fall −26.2%; CAGR +10.2% | ✗ |
+  | 3 Decisions and switches | ≥ 100 months and ≥ 15 switches | 219 months, 29 switches | ✓ |
+  | 4 Sub-periods | at least 3 of 4 positive | 4 of 4 (+56.4%, +95.0%, +30.1%, +48.8%) | ✓ |
+  | 5 Stress slippage | ≤ 1.25% at 15 bps | 37.2% | ✗ |
+  | 6 Neighbours | Sharpe above the random median (0.65) | 11 months 0.68; 13 months 0.67 | ✓ |
+  | 7 Fidelity | no disagreements | 0 in 239 months | ✓ |
+
+- **Smoke run:** a 5-seed smoke run preceded the registered run to catch crashes. Five random runs cannot resolve a 1.25% threshold, so its box ticks are not results. No code changed between the two runs; `smoke_run_5_seeds.log` is kept for transparency.
+- **Decision:** **Fail** (boxes 1, 2 and 5). Not run live, and not re-tuned on this data. Its timing was
+  no better than chance: about a third of randomly timed runs did at least as well. Its return came close to
+  60/40, but with a worst fall 1.7 times deeper.

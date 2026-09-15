@@ -107,6 +107,25 @@ Attempts 2–4 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-15, code `05f52b7`, rules `62c93ac`; 1,000 random-timing runs per slippage level. Window: signals 2008-05-30 → 2026-07-31 (219 months), trades from 2008-06-02, valued to 2026-08-31. IEF spliced with its ARCA-listed series before 2017-08-03 (overlap return correlation 0.999).
+- **Headline:** CAGR +5.5% a year, Sharpe 0.67, worst fall −14.8%, volatility 8.6%; £4,710.57 → £12,464;
+  217 orders, fees 0.45% of account value a year. 60/40 benchmark: CAGR +10.8%, Sharpe 0.93, worst fall
+  −15.8%. Equal-weight buy-and-hold of the same five assets (reported, not a box): CAGR +7.4%, Sharpe 0.59,
+  worst fall −28.1%.
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random timing | ≤ 1.25% of runs at least as good | 6.2% (random Sharpe median 0.49, 95th percentile 0.68) | ✗ |
+  | 2 Beats 60/40 | Sharpe above 0.93, or worst fall ≤ 7.9% with CAGR ≥ 8.8% | Sharpe 0.67; worst fall −14.8%; CAGR +5.5% | ✗ |
+  | 3 Round trips | at least 100 | 91 | ✗ |
+  | 4 Sub-periods | at least 3 of 4 positive | 4 of 4 (+17.4%, +34.5%, +29.8%, +29.1%) | ✓ |
+  | 5 Stress slippage | ≤ 1.25% at 15 bps | 5.9% | ✗ |
+  | 6 Neighbours | Sharpe above the random median (0.49) | 9 months 0.75; 11 months 0.55 | ✓ |
+  | 7 Fidelity | no disagreements | 0 in 239 months | ✓ |
+
+- **Smoke run:** a 5-seed smoke run preceded the registered run to catch crashes. Five random runs cannot resolve a 1.25% threshold, so its box ticks are not results. No code changed between the two runs; `smoke_run_5_seeds.log` is kept for transparency.
+- **Decision:** **Fail** (boxes 1, 2, 3 and 5). Not run live, and not re-tuned on this data.
+  Observation, not a box: it halved the worst fall of holding the same five assets and beat 94% of
+  randomly timed runs, which is suggestive of real drawdown control but well short of the bar. Its asset
+  mix (ex-US equities, property, commodities) trailed a US 60/40 by about 5 points a year over this window.

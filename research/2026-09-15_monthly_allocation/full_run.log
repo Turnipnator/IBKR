@@ -1,0 +1,161 @@
+inputs: {"SPY": {"first": "2006-09-20", "spliced": null}, "EFA": {"first": "2006-09-20", "spliced": null}, "IEF": {"first": "2017-08-03", "spliced": {"splice_date": "2017-08-03", "alt_first": "2006-09-20", "overlap_days": 2281, "ret_corr": 0.9985715517186134, "alt": "IEF-ARCA"}}, "VNQ": {"first": "2006-09-20", "spliced": null}, "GSG": {"first": "2006-09-20", "spliced": null}, "AGG": {"first": "2006-09-20", "spliced": null}, "BIL": {"first": "2007-05-30", "spliced": null}, "VEU": {"first": "2007-03-08", "spliced": null}, "ACWX": {"first": "2008-03-31", "spliced": null}} | ex-US: VEU
+window: signals 2008-05-30 -> 2026-07-31 (219 months), trades from 2008-06-02, valued to 2026-08-31
+fidelity: {'gtaa': {'disagree': 0, 'months': 239}, 'dm': {'disagree': 0, 'months': 239}, 'vol': {'disagree': 0, 'months': 239}}
+hand-check: {
+ "first": {
+  "month_end": "2008-05-30",
+  "trade_day": "2008-06-02",
+  "gtaa": {
+   "SPY": {
+    "close": 100.46,
+    "sma10": 102.064,
+    "signal": "out"
+   },
+   "EFA": {
+    "close": 44.02,
+    "sma10": 44.068,
+    "signal": "out"
+   },
+   "IEF": {
+    "close": 55.8735,
+    "sma10": 55.5096,
+    "signal": "in"
+   },
+   "VNQ": {
+    "close": 31.04,
+    "sma10": 30.367,
+    "signal": "in"
+   },
+   "GSG": {
+    "close": 67.9,
+    "sma10": 54.361,
+    "signal": "in"
+   }
+  },
+  "dm": {
+   "SPY": -0.0724,
+   "EXUS": 0.0314,
+   "BIL": 0.0207,
+   "hold": "AGG"
+  },
+  "vol": {
+   "sigma": 0.0877,
+   "exposure": 1.0
+  }
+ },
+ "middle": {
+  "month_end": "2017-06-30",
+  "trade_day": "2017-07-03",
+  "gtaa": {
+   "SPY": {
+    "close": 210.15,
+    "sma10": 197.667,
+    "signal": "in"
+   },
+   "EFA": {
+    "close": 49.86,
+    "sma10": 45.757,
+    "signal": "in"
+   },
+   "IEF": {
+    "close": 85.4301,
+    "sma10": 85.0891,
+    "signal": "in"
+   },
+   "VNQ": {
+    "close": 58.53,
+    "sma10": 57.256,
+    "signal": "in"
+   },
+   "GSG": {
+    "close": 14.02,
+    "sma10": 14.838,
+    "signal": "out"
+   }
+  },
+  "dm": {
+   "SPY": 0.1778,
+   "EXUS": 0.2079,
+   "BIL": 0.0034,
+   "hold": "EXUS"
+  },
+  "vol": {
+   "sigma": 0.0468,
+   "exposure": 1.0
+  }
+ },
+ "last": {
+  "month_end": "2026-07-31",
+  "trade_day": "2026-08-03",
+  "gtaa": {
+   "SPY": {
+    "close": 747.03,
+    "sma10": 701.704,
+    "signal": "in"
+   },
+   "EFA": {
+    "close": 105.58,
+    "sma10": 98.982,
+    "signal": "in"
+   },
+   "IEF": {
+    "close": 92.3,
+    "sma10": 93.683,
+    "signal": "out"
+   },
+   "VNQ": {
+    "close": 98.95,
+    "sma10": 91.879,
+    "signal": "in"
+   },
+   "GSG": {
+    "close": 32.04,
+    "sma10": 28.006,
+    "signal": "in"
+   }
+  },
+  "dm": {
+   "SPY": 0.195,
+   "EXUS": 0.2797,
+   "BIL": 0.038,
+   "hold": "EXUS"
+  },
+  "vol": {
+   "sigma": 0.0826,
+   "exposure": 1.0
+  }
+ }
+}
+one run 0.01s; 6016 tasks on 3 processes
+simulations done 29s
+
+60/40 benchmark: CAGR +10.8% Sharpe 0.93 worst fall -15.8% fees 0.04%/yr | EW5: CAGR +7.4% Sharpe 0.59 worst fall -28.1%
+
+=== gtaa: FAIL ===  CAGR +5.5% Sharpe 0.67 worst fall -14.8% vol 8.6% end £12,464 orders 217 fees 0.45%/yr | random Sharpe p5/50/95 0.33/0.49/0.68
+  [ ] 1 beats random timing: 6.2% of 1000 random runs have Sharpe >= 0.67 (need <= 1.25%)
+  [ ] 2 beats 60/40: Sharpe 0.67 vs 0.93; worst fall -14.8% vs -15.8%; CAGR +5.5% vs +10.8%
+  [ ] 3 enough decisions: 91 round trips
+  [x] 4 sub-periods: 4 of 4 positive: +17.4%, +34.5%, +29.8%, +29.1%
+  [ ] 5 stress slippage: 5.9% of random runs at 15 bps have Sharpe >= 0.65
+  [x] 6 neighbours: neighbour Sharpe 9: 0.75, 11: 0.55 vs random median 0.49
+  [x] 7 fidelity: 0 disagreements in 239 months
+
+=== dm: FAIL ===  CAGR +10.2% Sharpe 0.67 worst fall -26.2% vol 16.5% end £27,800 orders 97 fees 0.21%/yr | random Sharpe p5/50/95 0.47/0.65/0.79 | post-2014 CAGR +9.1%
+  [ ] 1 beats random timing: 35.7% of 1000 random runs have Sharpe >= 0.67 (need <= 1.25%)
+  [ ] 2 beats 60/40: Sharpe 0.67 vs 0.93; worst fall -26.2% vs -15.8%; CAGR +10.2% vs +10.8%
+  [x] 3 enough decisions: 219 monthly decisions, 29 switches
+  [x] 4 sub-periods: 4 of 4 positive: +56.4%, +95.0%, +30.1%, +48.8%
+  [ ] 5 stress slippage: 37.2% of random runs at 15 bps have Sharpe >= 0.65
+  [x] 6 neighbours: neighbour Sharpe 11: 0.68, 13: 0.67 vs random median 0.65
+  [x] 7 fidelity: 0 disagreements in 239 months
+
+=== vol: FAIL ===  CAGR +9.6% Sharpe 0.95 worst fall -15.3% vol 10.2% end £24,916 orders 127 fees 0.16%/yr | random Sharpe p5/50/95 0.81/0.88/0.96
+  [ ] 1 beats random timing: 9.9% of 1000 random runs have Sharpe >= 0.95 (need <= 1.25%)
+  [x] 2 beats 60/40: Sharpe 0.95 vs 0.93; worst fall -15.3% vs -15.8%; CAGR +9.6% vs +10.8%
+  [x] 3 enough decisions: 127 orders
+  [x] 4 sub-periods: 4 of 4 positive: +44.8%, +81.3%, +49.8%, +34.6%
+  [ ] 5 stress slippage: 9.1% of random runs at 15 bps have Sharpe >= 0.94
+  [x] 6 neighbours: neighbour Sharpe (0.08, 21): 0.94, (0.12, 21): 0.93, (0.1, 10): 0.92, (0.1, 42): 0.93 vs random median 0.88
+  [x] 7 fidelity: 0 disagreements in 239 months
+
+runtime 29s

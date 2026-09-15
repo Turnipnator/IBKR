@@ -121,9 +121,9 @@ large edge.
 | # | Date | Card | Result |
 |---|---|---|---|
 | 1 | 2026-09-15 | Live configuration, out of sample 2008–2023 (retro-filled, not pre-registered) | Fail |
-| 2 | 2026-09-15 | Monthly trend timing, 5 asset classes (`2026-09-15_monthly_allocation/PREREG_2_gtaa.md`) | Registered, not yet run |
-| 3 | 2026-09-15 | Dual momentum (`2026-09-15_monthly_allocation/PREREG_3_dual_momentum.md`) | Registered, not yet run |
-| 4 | 2026-09-15 | Volatility-targeted 60/40 (`2026-09-15_monthly_allocation/PREREG_4_vol_target_6040.md`) | Registered, not yet run |
+| 2 | 2026-09-15 | Monthly trend timing, 5 asset classes (`2026-09-15_monthly_allocation/PREREG_2_gtaa.md`) | Fail (boxes 1, 2, 3, 5) |
+| 3 | 2026-09-15 | Dual momentum (`2026-09-15_monthly_allocation/PREREG_3_dual_momentum.md`) | Fail (boxes 1, 2, 5) |
+| 4 | 2026-09-15 | Volatility-targeted 60/40 (`2026-09-15_monthly_allocation/PREREG_4_vol_target_6040.md`) | Fail (boxes 1, 5) |
 
 ### Data already seen
 
@@ -133,6 +133,7 @@ large edge.
 | 2025-06 → 2026-08 | 23 UCITS lines | TSMOM + CSMOM, stop multiples 1–8×ATR, 3 vs 5 slots | 2026-08-24 study |
 | 2023-09 → 2026-08 | 23 UCITS lines | TSMOM + CSMOM, class caps 40–100%, 3–5 slots | `2026-08-28_classcap/` |
 | 2008-01 → 2026-09 | 23 US-ETF proxies of the UCITS lines | TSMOM + CSMOM, thresholds 0.3–0.7, 2–4×ATR, 3–5 slots, random-pick nulls | `2026-09-15_oos/` |
+| 2008-05 → 2026-08 | SPY, EFA, IEF, VNQ, GSG, VEU, AGG, BIL | monthly trend timing (9–11 month averages), dual momentum (11–13 month lookbacks), volatility-targeted 60/40 (8–12%, 10–42 days), static 60/40, random-timing nulls | `2026-09-15_monthly_allocation/` |
 
 IBKR serves at most 20 years of daily bars, so these proxies have no history before 2006.
 For momentum or trend rules on this universe, every available period has been looked at.

@@ -4,6 +4,86 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-15 — Pre-registered monthly allocation tests (attempts 2–4)
+
+**Question.** After the live configuration failed out of sample, do three published, low-turnover
+approaches that suit a £4.7k UK cash account beat random timing of their own decisions and a passive
+60/40, after this account's costs?
+
+### 1. Decomposition
+- Q1 Can each rule be implemented exactly as published, with this account's costs and settlement?
+- Q2 Does its timing beat the same holdings timed at random?
+- Q3 Does it beat 60/40 on Sharpe, or halve its worst fall at a similar return?
+- Q4 Is any result robust to sub-periods, slippage and neighbouring settings?
+
+### 2. Competing hypotheses
+- **H2 — trend timing (Faber 2007)** controls drawdowns without giving up much return.
+- **H3 — dual momentum (Antonacci 2014)** picks the stronger equity market and dodges bear markets.
+- **H4 — volatility targeting (Moreira & Muir 2017; Harvey et al. 2018)** raises the Sharpe ratio of 60/40.
+- **H0 — for each:** its timing is indistinguishable from random timing, and passive 60/40 is as good or better.
+
+### 3. Method
+Pre-registered before any returns were computed: rules, costs, window, random-timing null, 1.25% threshold
+(5% ÷ 4, shared by the batch) and seven-box pass marks in `research/2026-09-15_monthly_allocation/`
+(`COMMON.md` and three `PREREG_*.md` cards, commit `62c93ac`); code `05f52b7`. Dividend-adjusted IBKR
+bars; IEF spliced with its ARCA listing before 2017-08-03. Daily cash-account simulator in GBP: next-day
+close fills ± 5 bps, max($4, 0.05%) commission, T+2 settlement with a 2% buffer, whole shares, idle cash at
+0%. Null: each strategy's monthly decision sequence circularly shifted by a random 12 to n−12 months,
+1,000 runs at 5 and at 15 bps. Window: signals 2008-05-30 → 2026-07-31 (219 months), valued to 2026-08-31.
+
+### 4. Evidence
+
+| | CAGR | Sharpe | Worst fall | Random runs ≥ | Boxes failed |
+|---|---|---|---|---|---|
+| 60/40 SPY/IEF, yearly rebalance | +10.8% | 0.93 | −15.8% | — | — |
+| Trend timing, 5 assets | +5.5% | 0.67 | −14.8% | 6.2% | 1, 2, 3, 5 |
+| Dual momentum | +10.2% | 0.67 | −26.2% | 35.7% | 1, 2, 5 |
+| Volatility-targeted 60/40 | +9.6% | 0.95 | −15.3% | 9.9% | 1, 5 |
+| Equal-weight 5 assets, yearly (info) | +7.4% | 0.59 | −28.1% | — | — |
+
+- **E1 fidelity (HIGH):** both signal implementations agree on all 239 months for all three rules; hand-check
+  rows in `results.json`.
+- **E2 trend timing (MEDIUM):** beat 94% of randomly timed runs and halved the worst fall of holding the same
+  five assets — suggestive of genuine drawdown control, not significant at the batch threshold (6.2% vs 1.25%)
+  or even at an unadjusted 5%. Only 91 round trips. The asset mix, not the timing, cost ~5 points a year
+  against a US 60/40.
+- **E3 dual momentum (HIGH):** timing indistinguishable from random (35.7%); return near 60/40 with a worst
+  fall 1.7× deeper; post-2014 CAGR +9.1%.
+- **E4 volatility targeting (HIGH):** exposure was 100% most months, so it tracked 60/40: Sharpe +0.02,
+  return −1.2 points a year, and 1 in 10 randomly timed runs matched it.
+- **E5 costs (HIGH):** fees 0.16–0.45% of account value a year — monthly rules escape the fee wall that sank
+  the daily bot; costs are not why these fail.
+
+### 5. Self-critique
+- *What would disprove the fails?* A strategy near the top of its random-timing distribution. Trend timing
+  came closest (94th percentile); with three tests registered together, that is not enough.
+- *Benchmark hindsight.* 2008–2026 favoured US equities and (until 2021) Treasuries, and the pound's fall lifted
+  GBP returns; a US 60/40 is a strong benchmark in this window. A 1970s-style inflationary period might favour
+  trend timing, but IBKR offers only 20 years of bars.
+- *Null design.* Circular shifts keep time invested and run lengths, so a rule that is simply "mostly
+  invested in a rising market" gains nothing over the null. That is intended: the question was whether the
+  timing adds value.
+- *Smoke run.* A 5-seed smoke run printed PASS for volatility targeting; 5 runs cannot resolve 1.25%. No code
+  changed before the registered run.
+- *Prior knowledge* of public commentary on these strategies was disclosed in `COMMON.md`.
+
+### 6. Conclusion
+- **Most supported: H0 for all three.** None clears its pre-registered bar. Dual momentum and volatility
+  targeting show no timing value; trend timing shows a hint of drawdown control that is not significant.
+- **The best practical result in this test was the passive benchmark:** 60/40 made +10.8% a year with a
+  −15.8% worst fall and 0.04% a year in fees.
+- **Ruled out, on this data:** each of the three as a way to beat 60/40. No re-tuning on this window.
+
+### 7. Suggested actions (user decision)
+1. If the aim is growing this money, the data-supported option is a low-cost passive allocation (e.g. a UCITS
+   equity tracker plus a bond fund, rebalanced yearly); the bot's order and settlement plumbing could automate
+   the yearly rebalance. That earns the market's return; it claims no edge.
+2. Trend timing's near-miss can only be revisited on data not used here (other markets, or a multi-year
+   forward test registered as a new card) — never by re-running this window with new settings.
+3. Stop or wind down the live momentum bot (see the 2026-09-15 out-of-sample entry below).
+
+---
+
 ## 2026-09-15 — Out-of-sample test of the frozen live config (2008–2023)
 
 **Question.** Every structural parameter (3 slots x 30%, 60% class cap, 3xATR, 8% vol floor, top-up
