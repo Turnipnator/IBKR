@@ -1,0 +1,121 @@
+frozen live config: {'max_open_positions': 3, 'max_position_pct': 0.3, 'max_asset_class_pct': 0.6, 'max_gross_exposure': 1.0, 'atr_stop_multiplier': 3.0, 'atr_period': 20, 'min_volatility': 0.08, 'signal_threshold': 0.5, 'tsmom_weight': 0.6, 'csmom_weight': 0.4, 'lookback_short': 21, 'lookback_medium': 63, 'lookback_long': 252, 'risk_budget': 0.2, 'reentry_cooldown_days': 10, 'topup_drift_threshold': 0.3, 'settled_cash_buffer': 0.06, 'min_partial_entry_pct': 0.5, 'min_partial_topup_pct': 0.5, 'topup_min_stop_buffer_atr': 1.0, 'drawdown_reduce_pct': 0.1, 'drawdown_halt_pct': 0.2, 'max_daily_loss': 200.0, 'enable_shorting': False}
+splices: {"TLT": {"alt": "TLT-ARCA", "splice_date": "2016-02-03", "alt_first": "2006-09-20", "overlap_days": 2668, "ret_corr": 0.9992374530843369, "vol_ratio_main_over_alt": 1.0050601125414318}, "IEF": {"alt": "IEF-ARCA", "splice_date": "2017-08-03", "alt_first": "2006-09-20", "overlap_days": 2290, "ret_corr": 0.9985739518740682, "vol_ratio_main_over_alt": 1.007786570424396}, "SHY": {"alt": "SHY-ARCA", "splice_date": "2017-08-03", "alt_first": "2006-09-20", "overlap_days": 2290, "ret_corr": 0.9809363734424464, "vol_ratio_main_over_alt": 1.0276638280624981}}
+split artefacts in raw bars (fall back to adjusted): {}
+V0 indicator validation (proxies): {'tsmom_mismatch': 0, 'price_mismatch': 0, 'atr_rel': np.float64(6.456257041719842e-15), 'vol_rel': np.float64(2.8319871208760297e-13), 'n': 400}
+proxy universe built (5026 days) 10s
+ucits universe built 14s
+V1 replay vs live instrument_signals: {'same_day_bar': {'pairs': 1813, 'tsmom_exact': 0.9172642029784887, 'combined_mae': 0.069146166574738, 'top3_same_days': 42, 'days': 76, 'price_match_rate': 0.07446221731936017, 'tsmom_exact_when_price_matches': 0.8666666666666667}, 'prior_day_bar': {'pairs': 1813, 'tsmom_exact': 0.8163265306122449, 'combined_mae': 0.1331825703254275, 'top3_same_days': 27, 'days': 76, 'price_match_rate': 0.03530060672917816, 'tsmom_exact_when_price_matches': 0.765625}}
+V2 fidelity: {"common_start": "2018-01-29", "pass_agree": 0.908626901521217, "top3_jaccard": 0.6302849264705882}
+   CSPX  vs SPY   weeks  503 corr 0.925 ann u 0.147 p 0.15
+   EQQQ  vs QQQ   weeks 1042 corr 0.885 ann u 0.153 p 0.163
+   RTWO  vs IWM   weeks  878 corr 0.884 ann u 0.111 p 0.11
+   EIMU  vs EEM   weeks  444 corr 0.951 ann u 0.042 p 0.058
+   VEUR  vs VGK   weeks  694 corr 0.957 ann u 0.045 p 0.077
+   CNYA  vs FXI   weeks  590 corr 0.693 ann u -0.005 p -0.008
+   IJPN  vs EWJ   weeks 1043 corr 0.952 ann u 0.034 p 0.048
+   DTLA  vs TLT   weeks  435 corr 0.949 ann u -0.014 p -0.015
+   IDTM  vs IEF   weeks  882 corr 0.897 ann u -0.002 p 0.023
+   IBTA  vs SHY   weeks  488 corr 0.907 ann u 0.018 p 0.017
+   LQDE  vs LQD   weeks 1037 corr 0.786 ann u -0.004 p 0.037
+   IHYU  vs HYG   weeks  782 corr 0.854 ann u -0.006 p 0.051
+   JPEA  vs EMB   weeks  490 corr 0.966 ann u 0.026 p 0.026
+   IDTP  vs TIP   weeks  888 corr 0.883 ann u 0.029 p 0.029
+   IGLN  vs GLD   weeks  805 corr 0.956 ann u 0.069 p 0.066
+   ISLN  vs SLV   weeks  802 corr 0.933 ann u 0.022 p 0.02
+   CRUD  vs USO   weeks 1042 corr 0.932 ann u -0.043 p -0.052
+   NGAS  vs UNG   weeks 1013 corr 0.917 ann u -0.299 p -0.281
+   AIGA  vs DBA   weeks 1028 corr 0.769 ann u 0.006 p 0.017
+   AIGI  vs DBB   weeks 1027 corr 0.897 ann u -0.004 p 0.016
+   CMOD  vs DJP   weeks  505 corr 0.964 ann u 0.075 p 0.082
+   COPA  vs CPER  weeks  771 corr 0.928 ann u 0.026 p 0.031
+   IDUP  vs VNQ   weeks  846 corr 0.717 ann u 0.087 p 0.098
+periods: {'ALL': ('2008-01-09', '2026-09-14'), 'OOS': ('2008-01-09', '2023-12-29'), 'OOS_A': ('2008-01-09', '2012-12-31'), 'OOS_B': ('2013-01-01', '2017-12-29'), 'OOS_C': ('2018-01-01', '2023-12-29'), 'IS': ('2024-01-01', '2026-09-14'), 'COMMON': ('2018-01-29', '2026-09-14')}
+one ALL run took 0.5s; 3027 specs on 3 procs
+simulations done 387s
+
+=== STRATEGIES ===
+strat_live_brakes        ALL    cagr  -0.7% sh -0.19 dd -20.3% vol  3.3% end £    4,143 trips   65 win 27.7% payoff 1.71 exp £ -8.73 fees  0.4%/yr orders/yr   7.5 dep   4% reduce   6% lossblock   0 tripret -1.81% halted 2009-06-22
+strat                    ALL    cagr -17.5% sh -1.86 dd -97.5% vol 10.1% end £      129 trips  920 win 25.4% payoff 1.62 exp £ -4.98 fees 11.5%/yr orders/yr 105.9 dep  62% reduce  99% lossblock   0 tripret -3.15% halted None
+strat_no_brakes          ALL    cagr  -3.9% sh -0.25 dd -63.7% vol 12.7% end £    2,258 trips  698 win 33.1% payoff 1.70 exp £ -3.54 fees  6.0%/yr orders/yr  81.8 dep  81% reduce   0% lossblock   1 tripret -0.59% halted None
+strat                    OOS    cagr -10.1% sh -1.09 dd -83.5% vol  9.4% end £      859 trips  796 win 28.0% payoff 1.52 exp £ -4.82 fees 10.1%/yr orders/yr 108.1 dep  66% reduce  98% lossblock   0 tripret -1.74% halted None
+strat_no_brakes          OOS    cagr  -3.9% sh -0.25 dd -57.5% vol 12.8% end £    2,496 trips  582 win 33.0% payoff 1.70 exp £ -3.88 fees  5.4%/yr orders/yr  80.0 dep  80% reduce   0% lossblock   1 tripret -0.57% halted None
+strat                    OOS_A  cagr  -4.2% sh -0.37 dd -27.3% vol 10.1% end £    3,803 trips  231 win 32.9% payoff 1.49 exp £ -4.56 fees  6.0%/yr orders/yr 103.1 dep  72% reduce  94% lossblock   0 tripret -0.91% halted None
+strat_no_brakes          OOS_A  cagr  +0.5% sh +0.11 dd -22.2% vol 13.5% end £    4,836 trips  170 win 35.9% payoff 1.79 exp £ +0.10 fees  3.6%/yr orders/yr  75.5 dep  81% reduce   0% lossblock   1 tripret -0.18% halted None
+strat                    OOS_B  cagr  -4.8% sh -0.48 dd -33.0% vol  9.3% end £    3,689 trips  255 win 31.0% payoff 1.58 exp £ -4.16 fees  7.2%/yr orders/yr 113.9 dep  67% reduce  88% lossblock   0 tripret -0.83% halted None
+strat_no_brakes          OOS_B  cagr  -4.9% sh -0.37 dd -32.3% vol 11.7% end £    3,671 trips  196 win 30.1% payoff 1.78 exp £ -5.33 fees  5.4%/yr orders/yr  86.6 dep  80% reduce   0% lossblock   0 tripret -0.62% halted None
+strat                    OOS_C  cagr  -8.7% sh -0.94 dd -43.2% vol  9.3% end £    2,723 trips  294 win 29.9% payoff 1.30 exp £ -6.93 fees  9.3%/yr orders/yr 108.7 dep  67% reduce  87% lossblock   0 tripret -1.48% halted None
+strat_no_brakes          OOS_C  cagr  -4.3% sh -0.27 dd -29.9% vol 13.0% end £    3,630 trips  216 win 33.3% payoff 1.59 exp £ -5.39 fees  6.1%/yr orders/yr  79.7 dep  80% reduce   0% lossblock   2 tripret -0.67% halted None
+strat                    IS     cagr  +0.3% sh +0.08 dd -20.3% vol 10.7% end £    4,753 trips  135 win 37.0% payoff 1.66 exp £ -0.35 fees  7.4%/yr orders/yr 113.4 dep  82% reduce  53% lossblock   1 tripret +0.00% halted None
+strat_no_brakes          IS     cagr  -0.2% sh +0.05 dd -23.0% vol 12.9% end £    4,687 trips  120 win 38.3% payoff 1.56 exp £ -0.75 fees  6.6%/yr orders/yr 101.1 dep  85% reduce   0% lossblock   3 tripret -0.18% halted None
+strat_live_brakes        OOS    cagr  -0.8% sh -0.21 dd -20.3% vol  3.5% end £    4,143 trips   65 win 27.7% payoff 1.71 exp £ -8.73 fees  0.5%/yr orders/yr   8.8 dep   5% reduce   7% lossblock   0 tripret -1.81% halted 2009-06-22
+strat_frictionless       OOS    cagr  +1.9% sh +0.22 dd -23.3% vol 11.0% end £    6,325 trips  718 win 39.4% payoff 1.70 exp £ +1.99 fees  0.0%/yr orders/yr 100.9 dep  72% reduce  57% lossblock   4 tripret -0.00% halted None
+strat_frictionless_no_brakes OOS    cagr  +3.5% sh +0.34 dd -25.0% vol 12.7% end £    8,196 trips  570 win 39.6% payoff 1.80 exp £ +5.79 fees  0.0%/yr orders/yr  78.9 dep  80% reduce   0% lossblock  11 tripret +0.35% halted None
+strat_50k                OOS    cagr  +0.1% sh +0.07 dd -24.6% vol 10.5% end £   51,202 trips  777 win 37.6% payoff 1.66 exp £ -0.36 fees  0.8%/yr orders/yr 108.5 dep  71% reduce  81% lossblock   4 tripret -0.09% halted None
+strat_50k_no_brakes      OOS    cagr  +2.0% sh +0.22 dd -26.7% vol 12.9% end £   69,127 trips  554 win 39.0% payoff 1.72 exp £+31.21 fees  0.9%/yr orders/yr  75.9 dep  81% reduce   0% lossblock   6 tripret +0.20% halted None
+strat_slip15_no_brakes   OOS    cagr  -7.2% sh -0.52 dd -75.8% vol 12.8% end £    1,436 trips  586 win 31.7% payoff 1.62 exp £ -5.64 fees  6.2%/yr orders/yr  80.5 dep  80% reduce   0% lossblock   1 tripret -0.88% halted None
+strat_tr_signals_no_brakes OOS    cagr  -2.8% sh -0.16 dd -45.4% vol 12.7% end £    2,985 trips  565 win 34.5% payoff 1.64 exp £ -3.22 fees  5.1%/yr orders/yr  77.5 dep  82% reduce   0% lossblock   1 tripret -0.46% halted None
+nb_threshold_0.3         OOS    cagr  -2.0% sh -0.09 dd -45.8% vol 13.1% end £    3,429 trips  621 win 34.6% payoff 1.74 exp £ -2.16 fees  4.9%/yr orders/yr  85.8 dep  84% reduce   0% lossblock   2 tripret -0.34% halted None
+nb_threshold_0.7         OOS    cagr  -1.5% sh -0.07 dd -43.7% vol 11.9% end £    3,702 trips  533 win 33.4% payoff 1.84 exp £ -2.04 fees  4.2%/yr orders/yr  73.2 dep  74% reduce   0% lossblock   1 tripret -0.29% halted None
+nb_atr_2x                OOS    cagr -25.8% sh -2.11 dd -99.2% vol 13.7% end £       40 trips  915 win 24.9% payoff 1.86 exp £ -5.10 fees 14.0%/yr orders/yr 121.5 dep  64% reduce   0% lossblock   0 tripret -2.23% halted None
+nb_atr_4x                OOS    cagr  +3.3% sh +0.31 dd -40.9% vol 13.5% end £    7,905 trips  327 win 40.1% payoff 1.74 exp £ +9.58 fees  1.6%/yr orders/yr  44.9 dep  87% reduce   0% lossblock  43 tripret +0.50% halted None
+nb_5slots_18pct          OOS    cagr  -6.0% sh -0.54 dd -66.3% vol 10.5% end £    1,744 trips  745 win 32.1% payoff 1.51 exp £ -4.03 fees  7.8%/yr orders/yr  96.9 dep  74% reduce   0% lossblock   0 tripret -0.91% halted None
+fid_proxy                COMMON cagr  -1.7% sh -0.06 dd -38.2% vol 13.4% end £    4,073 trips  342 win 36.3% payoff 1.60 exp £ -2.03 fees  6.8%/yr orders/yr  88.4 dep  82% reduce   0% lossblock   4 tripret -0.31% halted None
+fid_ucits                COMMON cagr  -2.0% sh -0.10 dd -44.3% vol 12.6% end £    3,942 trips  349 win 37.0% payoff 1.54 exp £ -2.46 fees  6.5%/yr orders/yr  88.0 dep  82% reduce   0% lossblock   1 tripret -0.26% halted None
+
+=== BENCHMARKS ===
+SPY_bh                   ALL    cagr +13.7% sh +0.77 dd -32.4% vol 19.2% end £   52,008
+6040_annual              ALL    cagr +10.5% sh +0.90 dd -15.9% vol 11.9% end £   30,518
+EW_monthly_frictionless  ALL    cagr  +6.4% sh +0.45 dd -19.8% vol 16.8% end £   14,884
+SPY_bh                   OOS    cagr +13.0% sh +0.72 dd -32.4% vol 19.8% end £   33,394
+6040_annual              OOS    cagr +10.5% sh +0.89 dd -15.9% vol 12.2% end £   23,341
+EW_monthly_frictionless  OOS    cagr  +5.3% sh +0.38 dd -19.8% vol 17.8% end £   10,820
+SPY_bh                   OOS_A  cagr  +6.4% sh +0.38 dd -32.4% vol 24.2% end £    6,425
+6040_annual              OOS_A  cagr  +9.3% sh +0.73 dd -15.9% vol 13.4% end £    7,328
+EW_monthly_frictionless  OOS_A  cagr  +5.1% sh +0.33 dd -19.8% vol 23.3% end £    6,024
+SPY_bh                   OOS_B  cagr +19.5% sh +1.33 dd -16.4% vol 14.1% end £   11,444
+6040_annual              OOS_B  cagr +13.9% sh +1.28 dd -12.6% vol 10.6% end £    9,026
+EW_monthly_frictionless  OOS_B  cagr  +5.4% sh +0.38 dd -17.0% vol 17.8% end £    6,109
+SPY_bh                   OOS_C  cagr +13.0% sh +0.72 dd -25.9% vol 19.8% end £    9,814
+6040_annual              OOS_C  cagr  +8.6% sh +0.73 dd -12.2% vol 12.2% end £    7,706
+EW_monthly_frictionless  OOS_C  cagr  +4.6% sh +0.47 dd -16.0% vol 11.0% end £    6,178
+SPY_bh                   IS     cagr +17.6% sh +1.12 dd -22.0% vol 15.7% end £    7,295
+6040_annual              IS     cagr +10.1% sh +1.00 dd -15.7% vol 10.2% end £    6,107
+EW_monthly_frictionless  IS     cagr +12.4% sh +1.30 dd -11.1% vol  9.4% end £    6,456
+
+=== NULLS ===
+null_sel@OOS                     n=500 strat cagr -10.1% sh -1.09 | null cagr p5/50/95 -21.7%/-6.6%/+0.8% sharpe -2.02/-0.56/+0.13 | p(cagr) 0.673 p(sharpe) 0.729 | trip ret strat -1.74% null p5/50/95 -3.66%/-1.03%/-0.07% p 0.713
+null_sel_no_brakes@OOS           n=500 strat cagr -3.9% sh -0.25 | null cagr p5/50/95 -6.5%/-0.6%/+4.7% sharpe -0.47/+0.02/+0.42 | p(cagr) 0.844 p(sharpe) 0.840 | trip ret strat -0.57% null p5/50/95 -0.89%/-0.12%/+0.59% p 0.846
+null_all_no_brakes@OOS           n=500 strat cagr -3.9% sh -0.25 | null cagr p5/50/95 -9.1%/-0.5%/+4.6% sharpe -0.60/+0.04/+0.41 | p(cagr) 0.792 p(sharpe) 0.822 | trip ret strat -0.57% null p5/50/95 -1.16%/-0.05%/+0.66% p 0.838
+null_sel_frictionless_no_brakes@OOS n=500 strat cagr +3.5% sh +0.34 | null cagr p5/50/95 +0.9%/+4.5%/+8.3% sharpe +0.13/+0.40/+0.68 | p(cagr) 0.665 p(sharpe) 0.659 | trip ret strat +0.35% null p5/50/95 +0.10%/+0.52%/+1.01% p 0.735
+null_sel_50k_no_brakes@OOS       n=500 strat cagr +2.0% sh +0.22 | null cagr p5/50/95 -1.0%/+2.6%/+6.7% sharpe -0.01/+0.26/+0.55 | p(cagr) 0.587 p(sharpe) 0.575 | trip ret strat +0.20% null p5/50/95 -0.10%/+0.32%/+0.81% p 0.661
+null_sel_no_brakes@IS            n=500 strat cagr -0.2% sh +0.05 | null cagr p5/50/95 -6.1%/+3.4%/+14.7% sharpe -0.42/+0.33/+1.11 | p(cagr) 0.733 p(sharpe) 0.731 | trip ret strat -0.18% null p5/50/95 -0.72%/+0.28%/+1.50% p 0.782
+
+=== CRISES (ALL run, no terminal halt) ===
+GFC 2007-10..2009-03     strat -2.6% strat_no_brakes +6.2% SPY -29.4% p6040 +1.9% EW -6.0%
+2011 downgrade           strat -2.8% strat_no_brakes -1.1% SPY -12.0% p6040 +1.5% EW -6.8%
+2015-16 selloff          strat -6.0% strat_no_brakes -7.6% SPY -5.9% p6040 +2.1% EW -11.5%
+Q4 2018                  strat -5.6% strat_no_brakes -4.4% SPY -15.8% p6040 -7.0% EW -2.8%
+COVID crash              strat -5.2% strat_no_brakes -2.8% SPY -25.9% p6040 -8.1% EW -11.2%
+2022 rates               strat +2.7% strat_no_brakes +21.3% SPY -8.3% p6040 -3.9% EW +5.2%
+
+=== YEARS ===
+2009 strat -10.1% strat_no_brakes +4.0% SPY +14.2% p6040 +1.2% EW +8.1%
+2010 strat +6.3% strat_no_brakes +8.9% SPY +19.2% p6040 +16.8% EW +17.7%
+2011 strat -11.5% strat_no_brakes -7.7% SPY +2.3% p6040 +7.8% EW -2.2%
+2012 strat -3.7% strat_no_brakes -7.9% SPY +11.1% p6040 +6.1% EW -1.1%
+2013 strat -8.3% strat_no_brakes -4.3% SPY +29.7% p6040 +14.4% EW +3.2%
+2014 strat -3.9% strat_no_brakes +0.8% SPY +20.6% p6040 +18.5% EW +5.2%
+2015 strat -7.5% strat_no_brakes -10.5% SPY +7.0% p6040 +7.1% EW -4.9%
+2016 strat -0.2% strat_no_brakes +5.0% SPY +34.0% p6040 +28.7% EW +30.8%
+2017 strat -18.2% strat_no_brakes -16.2% SPY +11.1% p6040 +4.1% EW +1.5%
+2018 strat -19.6% strat_no_brakes -17.0% SPY +1.1% p6040 +3.5% EW -1.5%
+2019 strat -10.9% strat_no_brakes -3.4% SPY +26.3% p6040 +17.3% EW +9.9%
+2020 strat -10.3% strat_no_brakes -8.3% SPY +14.6% p6040 +11.4% EW +4.7%
+2021 strat -15.2% strat_no_brakes +3.6% SPY +30.1% p6040 +17.2% EW +13.7%
+2022 strat -6.9% strat_no_brakes +8.7% SPY -8.5% p6040 -7.1% EW +1.7%
+2023 strat -33.1% strat_no_brakes -18.0% SPY +19.7% p6040 +11.2% EW -0.0%
+2024 strat -45.0% strat_no_brakes -5.9% SPY +27.2% p6040 +16.7% EW +12.4%
+2025 strat -57.7% strat_no_brakes +9.1% SPY +9.5% p6040 +5.9% EW +10.9%
+2026 strat -35.2% strat_no_brakes -11.8% SPY +11.8% p6040 +5.8% EW +10.3%
+
+fidelity strategy corr daily 0.574 weekly 0.727; runtime 388s

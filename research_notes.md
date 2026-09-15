@@ -4,6 +4,187 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-15 — Out-of-sample test of the frozen live config (2008–2023)
+
+**Question.** Every structural parameter (3 slots x 30%, 60% class cap, 3xATR, 8% vol floor, top-up
+gates) was chosen on 2024-09 -> 2026-08 data. Replayed unchanged over 2008-01-09 -> 2023-12-29, which
+none of those decisions looked at, does the live configuration beat (a) random selection under
+identical mechanics and costs, and (b) passive benchmarks?
+
+### 1. Decomposition
+- Q1 Can the engine and universe be replayed faithfully before 2024 (data, proxies, signal fidelity)?
+- Q2 Net result at live capital and costs, with and without the drawdown brakes.
+- Q3 Does momentum *selection* beat random selection with the same timing, stops, sizing and fees?
+- Q4 Is there a gross edge that costs destroy (frictionless, £50k)?
+- Q5 Regime behaviour: crises, calendar years, sub-periods.
+- Q6 Parameter stability in the neighbourhood (reported, never selected on).
+
+### 2. Competing hypotheses
+- **H0 — no selection edge.** The strategy is indistinguishable from random picks with the same mechanics.
+- **H1 — gross edge, eaten by fixed fees.** Frictionless and £50k runs would beat random picks.
+- **H2 — net edge.** Survives live costs.
+- **H3 — the value is crisis protection, not return.**
+
+### 3. Method
+`research/2026-09-15_oos/`: `fetch_bars.py`, `fetch_treasuries.py`, `oos_study.py`, `results.json`,
+`curves_weekly.csv`, `trips_oos.csv`, `full_run.log` (raw bars stay on the VPS in
+`/root/ibkr_research/oos/bars`). Read-only IBKR session (clientId 23, requests 12 s apart; the bot's
+data probe stayed OK throughout). The 23 live UCITS lines map to the US ETFs they replaced, 20Y of
+dividend-adjusted daily bars. AIGS (IBKR longName *WT SOFTS*) has no long proxy and is excluded; CMOD
+tracks BCOM, so its proxy is DJP. IBKR's SMART-qualified TLT/IEF/SHY history starts 2016-02 / 2017-08;
+the same ETFs pinned to ARCA return 20Y (overlap return corr 0.98–0.999) and are spliced on before the
+first bar. Signals: vectorised TSMOM/ATR/vol, validated against the real `TrendFollowingAnalyzer`;
+253-bar window (what live "1 Y" requests return); price-only TSMOM for proxies of distributing lines,
+because the bot reads unadjusted bars. Targets come from the real
+`DecisionEngine._calculate_target_positions`. Mechanics mirror live: fill at the signal close ± 5 bps;
+3xATR trail ratcheting on the daily high, gap fills at the open; top-up below 70% of target with the
+1xATR gate and ratchet-preserving re-arm; settled cash T+2 with the 6% buffer, per-cycle tally and 50%
+floors; 10-day cooldown; £200 daily-loss gate; REDUCE halves targets at 10% below the all-time peak;
+HALT flattens at 20% and stays halted (the stored peak never resets). Costs max($4, 0.05%) per order.
+Nulls, 500 seeds each with the same mechanics and costs: **SEL** permutes scores among vol-eligible
+names each month (the number of names passing the threshold — the timing — is kept; the names are
+random); **ALL** gives every eligible name a random passing score (always invested, no timing).
+Benchmarks in GBP: SPY buy-and-hold, 60/40 SPY/IEF rebalanced annually with fees, equal-weight
+universe rebalanced monthly (frictionless).
+
+### 4. Evidence
+
+**E1 — fidelity (HIGH).** V0: 0/400 TSMOM or price mismatches, ATR/vol agree to 1e-13. V1 vs the
+live `instrument_signals` (76 days): TSMOM exact 91.7% on the same-day bar (81.6% on the prior
+close); the stored price equals the full-day close only 7% of the time, so the residual is the bot's
+14:00 partial bar. V2, UCITS vs proxy since 2018-01-29: weekly return corr 0.69–0.97 (weakest CNYA/FXI
+0.69 A- vs H-shares, IDUP/VNQ 0.72, AIGA/DBA 0.77); trade/no-trade agreement 91%; top-3 Jaccard 0.63.
+Strategy level (brakes off): −1.7%/yr on proxies vs −2.0%/yr on UCITS bars, DD −38% vs −44%, 342 vs
+349 trips, weekly corr 0.73.
+
+**E2 — as live (HIGH).** The terminal HALT fires on **2009-06-22** at −20.3% after 65 trips; the bot
+would have flattened and stopped. Without the terminal halt, REDUCE is on for **98% of days**: the
+all-time peak never resets, half-size positions double the fee ratio, and £4,710 -> **£859** by 2023
+(−10.1%/yr, DD −83.5%, fees 10.1% of NLV/yr) -> £129 by 2026-09.
+
+**E3 — brakes off (HIGH).** −3.9%/yr, £4,710 -> £2,496, DD −57.5%, 582 trips, win 33%, payoff 1.70,
+−0.57% per trip, fees 5.4% of NLV/yr. Sub-periods: 2008–12 +0.5%, 2013–17 −4.9%, 2018–23 −4.3%;
+in-sample 2024–26 −0.2%. Benchmarks over the same OOS window: SPY +13.0%/yr (DD −32%), 60/40 +10.5%
+(DD −16%, Sharpe 0.89), equal-weight universe +5.3%.
+
+**E4 — vs random selection (HIGH that there is no large edge; MEDIUM on the sign).** Below the null
+median in all six comparisons:
+
+| Comparison (OOS unless noted) | Strategy CAGR | Null CAGR p5 / p50 / p95 | Share of nulls ≥ strategy |
+|---|---|---|---|
+| As live, no terminal halt vs SEL | −10.1% | −21.7% / −6.6% / +0.8% | 67% |
+| Brakes off vs SEL | −3.9% | −6.5% / −0.6% / +4.7% | 84% |
+| Brakes off vs ALL | −3.9% | −9.1% / −0.5% / +4.6% | 79% |
+| Frictionless, brakes off vs SEL | +3.5% | +0.9% / +4.5% / +8.3% | 67% |
+| £50k, brakes off vs SEL | +2.0% | −1.0% / +2.6% / +6.7% | 59% |
+| In-sample 2024–26, brakes off vs SEL | −0.2% | −6.1% / +3.4% / +14.7% | 73% |
+
+**E5 — costs (HIGH).** Frictionless +3.5%/yr; £50k (fees 0.9%/yr) +2.0%/yr; 15 bps slippage −7.2%/yr.
+The gross positive exists, but random picks with the same stops earn it too (E4).
+
+**E6 — null turnover (MEDIUM).** SEL nulls trade less: 66 vs 80 orders/yr, 42 vs 109 top-ups (daily
+re-ranking moves targets between 20% and 30% under the class cap). That is worth ~1%/yr at live
+costs, but the frictionless comparison, where turnover costs nothing, still favours random picks per
+trip (+0.49% vs +0.35%). Conclusion unchanged; the null is mildly favoured by construction.
+
+**E7 — crises and years (MEDIUM).** Brakes off: GFC from 2008-01 +6.2% (SPY −29.4%, 60/40 +1.9%),
+COVID −2.8% (SPY −25.9%), 2022 +21.3% (SPY −8.3%, 60/40 −3.9%); but 2015–16 −7.6%, and negative in
+9 of 15 calendar years 2009–2023 against one negative year for SPY.
+
+**E8 — neighbourhood, brakes off (LOW; choosing parameters from this table would snoop on the OOS).**
+Threshold 0.3 −2.0%, 0.7 −1.5% (both beat 0.5 — non-monotonic, i.e. noise); ATR 2x −25.8%, **4x
++3.3%** (fees 1.6%/yr, 45 orders/yr — the only positive live-cost cell, monotone in turnover and about
+equal to the frictionless result); 5 slots/18% −6.0% (3 slots better, consistent with 08-24);
+total-return signals −2.8%.
+
+**E9 — reconciliation with 08-28 (MEDIUM).** That study's 2Y window (2024-09-02 -> 2026-08-28, no
+slippage) gives +11.0% on proxies (08-28 reported +10.8%) and +5.0% on UCITS bars — inside the path
+spread the nulls show. Not a simulator bias.
+
+### 5. Self-critique
+- *What would disprove H0?* The strategy near the top of the null distribution in any cost regime. It
+  never gets there; its best showing beats 41% of nulls (£50k).
+- *Null design.* Monthly-fixed permutations lower null turnover (E6); the frictionless comparison
+  removes that advantage and H0 still holds.
+- *Proxy error.* CNYA/FXI, IDUP/VNQ and AIGA/DBA are imperfect; AIGS is excluded. The universe was
+  chosen in 2026 (survivorship in absolute returns), which affects the nulls equally.
+- *Execution.* Close fills vs the bot's 14:00 partial bars; no intraday stop ordering; FX on USD cash
+  not modelled; no interest on idle cash (IBKR pays none at this size); LSE vs US holidays ignored.
+- *Snooping.* One pass of the frozen config over periods fixed before the results; the neighbourhood is
+  reported, not optimised.
+- *Simpler explanation for E2?* The brake design, not the signal — but brakes-off also loses (E3).
+
+### 6. Conclusion
+- **Most supported: H0.** Over 16 unseen years the live configuration's selection is indistinguishable
+  from random picks, and below their median every time. The small gross positive (+3.5%/yr
+  frictionless) is not the momentum ranking's doing, and fixed fees at £4.7k turn it negative
+  (−3.9%/yr). With the live brakes it halts in June 2009; without the terminal halt it bleeds in
+  permanent REDUCE. A passive 60/40 made +10.5%/yr with a −16% drawdown.
+- **H3 partly:** crisis behaviour is real (GFC, COVID, 2022), but a 60/40 also protected in the GFC.
+- **Ruled out:** H2 (no sub-period above +0.5%/yr); H1 in its "the signal is fine, it's the fees" form,
+  since the frictionless and £50k runs still sit below random.
+- **Open:** a different design (lower turnover, broad-asset TSMOM, monthly cadence) is untested, and
+  testing it on this same window would snoop — it needs a pre-registered hypothesis and acceptance
+  test. Partial-bar timing; in-sample path sensitivity.
+
+### 7. Suggested actions (user decision — nothing changed live)
+1. Decide whether to keep trading live on a configuration with no edge in 16 years out of sample:
+   stop, move to a passive allocation, or keep it as an engineering project at minimum size.
+2. If it keeps running: the REDUCE brake's never-resetting peak is a trap (98% of days once tripped).
+3. Any new design: write the hypothesis and acceptance test first (e.g. beat SEL nulls at p < 0.05 at
+   live costs), then test.
+4. P3 cosmetic: `contracts.py` labels AIGS "Broad Commodities (DBC proxy)"; IBKR's longName is WT SOFTS.
+
+---
+
+## 2026-09-15 — Assessment of an external "is this bot sound?" review
+
+**Question.** A third-party review (written from the old Jan-2026 "momentum scalper" README found
+via search; the rewrite 2a9be05 landed on origin today) lists upgrades: prove net edge, independent
+risk governor, volatility sizing, backtest hygiene, execution realism. Which apply to the live
+daily UCITS trend bot, which are already done, and which are real gaps?
+
+**Hypotheses.** H1 the review is mostly obsolete (wrong strategy); H2 its core point — no proven
+net edge — holds regardless of strategy; H3 its control checklist exposes gaps in the risk shell.
+
+**Evidence.**
+- E1 (HIGH) Scalping-specific items (5-min bars, lunch/opening filters, earnings/FOMC, borrow,
+  point-in-time constituents) do not apply to a daily-rebalanced long-only ETF book.
+- E2 (HIGH) Live tape 05-22 -> 09-15: 31 round-trips, 5W/26L (16%), realized -£243.78 after both
+  commissions = **-£7.86/trip**; payoff 1.61x needs 38% win rate. NLV £5,008 -> £4,724 (-5.7%).
+  Rank IC over the live period -0.027 (08-24 study). Net expectancy is negative on the record.
+- E3 (HIGH, arithmetic) The live tape cannot settle the edge question: t = SR x sqrt(years), so a
+  Sharpe-0.5 strategy needs ~16 years of live data to reach t=2. Validation has to be an
+  out-of-sample backtest with FROZEN parameters; the live tape's job is checking costs/mechanics.
+- E4 (MEDIUM) Parameter stability is already shaky: the 08-24 "3 slots beat 5 in 8/8" did not
+  reproduce under the fuller 08-28 simulator (E7 there). Structural params (slots, caps, 3xATR)
+  were chosen on 2024-09 -> 2026-08 data; pre-2024 is untouched and usable as OOS.
+- E5 (HIGH) Sizing is equal-NOTIONAL, not equal-risk: the 30% cap binds for every name, so
+  risk-to-stop at the cap (3xATR, 09-14 signals, vol >= 8% names) ranges £26 (RTWO) -> £148 (ISLN);
+  current targets CMOD £42 (0.9% NLV) vs CRUD £97 (2.1%). README's "equal risk per slot" misleads.
+- E6 (HIGH) Entries are market orders (engine.py place_market_order); no bid/ask/mid is logged,
+  so spread/slippage on thin ETC lines is unmeasured.
+- E7 (HIGH) Controls already present: server-side GTC trails, quantity-aware parity at
+  start/reconnect/risk-check, daily loss on IBKR BASE realized+unrealized, 10%/20% drawdown brakes,
+  per-name/class/gross caps, cooldown, settled-cash gate + per-cycle tally, fill notifier, ledger.
+- E8 (LOW risk) Small gaps: no Telegram "pause new entries" command; no last-bar-date check before
+  signals; `_last_rebalance_date` is in-memory, so a restart inside 14:00-14:04 re-runs the
+  rebalance and the engine does not net open (unfilled) BUYs.
+- E9 Pushback: a consecutive-loss breaker would fight a low-win-rate trend strategy; a kill switch
+  that cancels working orders would strip the stops (pause entries, keep stops instead).
+
+**Conclusion.** H1 partly (~40% of the review is obsolete); **H2 holds and is the one that
+matters**; H3 yields only small gaps. At £4.7k the 08-28 sim's best 2Y cell made +5.3%/yr after
+~5.1%/yr of fees — the fee wall is the size of any plausible edge.
+
+**Next steps.** (1) Frozen-parameter OOS backtest pre-2024 on the US-ETF proxies in
+`data/phase1_ucits_mapping.csv` (unverified: whether IBKR serves that history to a UK retail
+account, and several proxies start 2007-2014). (2) Log bid/ask/mid at order time to measure
+implementation shortfall before considering marketable limits. (3) Optional: entry-pause command,
+bar-date check, persisted rebalance date. Sizing refinements wait on (1).
+
+---
+
 ## 2026-08-28 — Does the 40% asset-class cap suit a 3-slot / 30% book?
 
 **Trigger.** Since the 08-24 change (3 slots × 30% per name, `max_asset_class_pct` 0.40) every
