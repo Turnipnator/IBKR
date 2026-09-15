@@ -1,307 +1,458 @@
-# IBKR Trading Bot
+# IBKR Trend-Following Bot
 
-An automated trading bot for Interactive Brokers (IBKR) that implements a momentum scalping strategy across Precious Metals, AI, and Tech sectors.
+An automated, long-only **trend-following / momentum** trading bot for Interactive
+Brokers. It trades a fixed universe of 24 **UCITS ETFs and ETCs listed on the London
+Stock Exchange** across equities, bonds, commodities and property. Once a day it holds
+the top 3 names by momentum score, and every position carries a server-side ATR
+trailing stop.
 
-## Overview
+**Status:** 🔴 **LIVE** since 2026-05-22 on a small GBP-based IBKR **cash account**. There
+is no paper environment. See [Testing](#testing) for how changes are tested before
+they're deployed.
 
-This bot connects to Interactive Brokers via their API and executes trades based on technical analysis signals. It runs continuously during market hours, analyzing price action and executing trades when conditions align.
+> Built for a UK retail account. UK/EU retail investors can't buy US-listed ETFs
+> (PRIIPs/KID rules, IBKR Error 201), which is why the universe is UCITS-on-LSE rather
+> than SPY/GLD/TLT.
 
-**Current Mode:** Paper trading (dry run) for strategy validation.
+---
 
-## Trading Strategy
+## Contents
 
-### Momentum Scalping
+- [Strategy](#strategy)
+- [Execution & safety nets](#execution--safety-nets)
+- [Architecture](#architecture)
+- [Project structure](#project-structure)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+- [Telegram](#telegram)
+- [Database](#database)
+- [Monitoring](#monitoring)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Disclaimer](#disclaimer)
 
-The strategy is optimised for quick, high-probability trades:
+---
 
-- **Take Profit:** 1.5% (lock in gains quickly)
-- **Stop Loss:** 3% (wider to avoid noise and false breakouts)
-- **Timeframe:** 5-minute candles
-- **Trade Direction:** Long positions only (BULLISH trend requirement)
+## Strategy
 
-### Asset Universe
+This is time-series and cross-sectional momentum after Moskowitz, Ooi & Pedersen
+(2012), adapted for a small cash account where IBKR's fixed minimum commission is a
+first-order cost.
 
-| Sector | Symbols |
-|--------|---------|
-| Precious Metals | GLD, SLV |
-| AI | NVDA, AMD, GOOGL, MSFT |
-| Tech | AAPL, TSLA, META, AMZN |
+### Universe (`data/watchlist.json` + `src/contracts.py`)
 
-### Entry Criteria
+| Class | Instruments |
+|-------|-------------|
+| Equity | CSPX (S&P 500), EQQQ (Nasdaq-100), RTWO (Russell 2000), EIMU (EM IMI), VEUR (Developed Europe), CNYA (China A), IJPN (Japan) |
+| Bond | DTLA (UST 20+y), IDTM (UST 7–10y), IBTA (UST 1–3y), LQDE (USD IG corp), IHYU (USD HY corp), JPEA (EM sovereign), IDTP (TIPS) |
+| Commodity | IGLN (gold), ISLN (silver), CRUD (WTI), NGAS (nat gas), AIGA (agriculture), AIGI (industrial metals), CMOD / AIGS (broad commodities), COPA (copper) |
+| Alt | IDUP (US property) |
 
-A trade is triggered when multiple indicators align (minimum 50% signal strength):
+All contracts use `SMART` routing with `primaryExchange='LSEETF'`. Most trade in USD
+share classes. VEUR trades in GBP. **EQQQ and IJPN are quoted in pence** (IBKR
+`priceMagnifier=100`), so the registry tags them `GBX` and the engine converts at
+0.01 GBP per price unit. `data/phase1_ucits_mapping.csv` records which US ETF each
+UCITS line replaced.
 
-1. **EMA Alignment** - Fast EMA (9) > Slow EMA (21) > Trend EMA (50)
-2. **RSI Confirmation** - Not overbought (RSI < 70)
-3. **MACD Crossover** - MACD line above signal line with positive histogram
-4. **Bollinger Bands** - Price position within bands
-5. **Volume Confirmation** - Current volume >= average volume
-6. **Trend Filter** - Overall trend must be BULLISH
+### Signal (daily bars, recomputed at every rebalance)
 
-### Technical Indicators
+1. **TSMOM**: the weighted sign of each instrument's total return over three lookbacks:
+   `0.3 × sign(21d) + 0.3 × sign(63d) + 0.4 × sign(252d)`, giving a score in [−1, +1].
+2. **CSMOM**: the instrument's TSMOM percentile rank across the universe, mapped linearly to [−1, +1].
+3. **Combined** = `0.6 × TSMOM + 0.4 × CSMOM`. A name is a candidate only if
+   **combined ≥ 0.5** (long-only; shorting is disabled).
 
-All indicators are calculated using pure Python/NumPy (no TA-Lib dependency):
+### Selection filters (applied before ranking, so empty slots backfill)
 
-- **EMA** (9, 21, 50) - Exponential Moving Averages for trend detection
-- **RSI** (7-period) - Shorter period for faster scalping signals
-- **MACD** (8, 17, 9) - Faster settings for momentum detection
-- **Bollinger Bands** (10-period, 2 std) - Volatility and mean reversion
-- **ATR** (7-period) - Volatility measurement
-- **Stochastic** (5, 3) - Momentum oscillator
+- **Re-entry cooldown (10 days):** a name whose stop fired recently is skipped for new
+  entries. Names already held are never filtered, because that would force a sale.
+- **Minimum volatility (8% annualised):** cash proxies such as T-bill ETFs look like
+  perfect trends (a yield-accruing flat line is "up" over every lookback), but no stop
+  can survive their bid-ask spread. These names get no new money. Held ones exit via
+  their stop.
+- **Affordability:** a name that can't fill at least 1 share within the per-position cap is skipped.
 
-### Risk Management
+### Sizing
 
-- **Position Sizing:** Max 10% of portfolio per position
-- **Sector Exposure:** Max 40% in any single sector
-- **Cooldown Period:** 20 minutes after a stop loss is hit
-- **Daily Trade Limit:** Max 3 trades per symbol per day
-- **Daily Loss Limit:** Stops trading if daily losses exceed threshold
-- **Volume Filter:** Minimum 100,000 volume requirement
+- **3 slots** (`max_open_positions`). Equal risk per slot: `risk_budget × capital / N`
+  divided by the stop distance (`3 × ATR / price`), rounded to the nearest whole share
+  (the API doesn't support fractional shares).
+- **Max 30% of equity per name.** In practice this cap binds for every instrument, so it
+  effectively sets position size.
+- **Max 60% per asset class** (2 × the per-name cap), and **gross exposure ≤ 100%**
+  (no leverage).
+- Capital is **cash + gross position value**. It is *not* IBKR's `EquityWithLoanValue`,
+  which on a cash account only counts settled cash.
+
+Why so few, large positions: IBKR's $4 minimum per order makes a round trip cost about
+$8 whatever the trade size. At small capital that fee was consuming a large share of
+every trade's risk-to-stop. Cutting from 8 slots to 5 and then to 3 spread the fixed
+cost over more capital. The reasoning and backtests are in `src/config.py` comments
+and `research_notes.md`.
+
+### Exits & risk limits
+
+| Control | Setting | Behaviour |
+|---------|---------|-----------|
+| Trailing stop | 3 × ATR(20) | GTC `TRAIL` order held **at IBKR**. It ratchets up server-side and fires even if the bot is down |
+| Daily loss halt | £200 (base GBP) | Blocks new entries for the rest of the day; stops stay active |
+| Drawdown reduce | 10% from peak | Halves all targets |
+| Drawdown halt | 20% from peak | Flattens the book and halts |
+| Top-up threshold | < 70% of target | A held position is only topped up once it drifts more than 30% below target |
+
+Nothing is force-sold at rebalance. A name that drops out of the top 3 stops being
+topped up and exits on its own trailing stop.
+
+---
+
+## Execution & safety nets
+
+The live order path is built around the constraints of an IBKR **cash account**:
+
+- **Entry race:** the protective SELL stop is attached only after the market BUY
+  reports `Filled`. Attaching it earlier opens a short, which a cash account rejects
+  with Error 201.
+- **Settled-cash sizing:** each BUY is trimmed to what `AvailableFunds` covers, with a
+  6% buffer. A trimmed entry (or top-up) below 50% of what was wanted is skipped. Within
+  one rebalance, a per-cycle committed-cash tally subtracts earlier BUYs, because
+  ib_insync's cached account summary lags.
+- **Top-ups:** BUY only the shortfall. Once it fills, swap the stop for one covering the
+  full position. The swap **keeps the ratcheted trigger** if the fresh 3×ATR level would
+  be lower, and restores the old stop if the replacement fails. Top-ups are skipped when
+  price is within 1×ATR of the stop the position would carry.
+- **Order parity (quantity-aware):** at startup, at every risk check and at every
+  rebalance, the bot compares shares held with shares covered by working stops. It
+  rebuilds any shortfall and alerts on orphaned stops.
+- **Post-rebalance stop sweep:** reconciles again 30s and 120s after a rebalance with
+  executions.
+- **Fill notifier:** subscribes to `commissionReportEvent`. Stop fills (including ones
+  that happened while the bot was offline) are logged, recorded with IBKR's realized
+  P&L, sent to Telegram, and start the re-entry cooldown.
+- **Trade ledger:** every order is written to the `trades` table as `SUBMITTED` and
+  moved to `FILLED` / `CANCELLED` / `REJECTED` from `orderStatusEvent`.
+- **NLV reconciliation:** compares IBKR NetLiquidation with the last equity snapshot and
+  alerts at ≥ 2% drift.
+- **Data-health probe:** every 5 minutes during market hours. On repeated failures it
+  restarts the `ib-gateway` container through the Docker socket (capped at 3/day). It
+  **won't restart a gateway that is mid-login or waiting for 2FA**, because that would
+  kill the pending push.
+- **Loop watchdog:** if the probe keeps failing and self-heal isn't working, the bot
+  exits so Docker recreates it. It also holds off while a 2FA approval is outstanding.
+- **Per-symbol isolation:** an unexpected exception on one instrument is logged and
+  alerted, and the stop sweep still runs.
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Docker Environment                    │
-│  ┌─────────────────┐      ┌─────────────────────────┐  │
-│  │   IB Gateway    │◄────►│     Trading Bot         │  │
-│  │   (Port 4002)   │      │                         │  │
-│  │                 │      │  ┌─────────────────┐    │  │
-│  │  - IBKR Auth    │      │  │ Decision Engine │    │  │
-│  │  - API Proxy    │      │  └────────┬────────┘    │  │
-│  └─────────────────┘      │           │             │  │
-│                           │  ┌────────▼────────┐    │  │
-│                           │  │ Technical       │    │  │
-│                           │  │ Analysis        │    │  │
-│                           │  └────────┬────────┘    │  │
-│                           │           │             │  │
-│                           │  ┌────────▼────────┐    │  │
-│                           │  │ Order Manager   │    │  │
-│                           │  └────────┬────────┘    │  │
-│                           │           │             │  │
-│                           │  ┌────────▼────────┐    │  │
-│                           │  │ SQLite Database │    │  │
-│                           │  └─────────────────┘    │  │
-│                           └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │    Telegram     │
-                    │  Notifications  │
-                    └─────────────────┘
+┌──────────────────────────── Docker host (network_mode: host) ────────────────────────────┐
+│                                                                                           │
+│  ┌──────────────────────┐  API 4001 (live)  ┌──────────────────────────────────────────┐ │
+│  │  ib-gateway          │◄─────────────────►│  trading-bot  (python -m src.bot)        │ │
+│  │  gnzsnz/ib-gateway   │                   │                                          │ │
+│  │  IBC auto-login,     │                   │  bot.py ─ scheduler, live loop, parity,  │ │
+│  │  nightly 23:55       │                   │           fill/ledger handlers           │ │
+│  │  soft restart        │                   │  engine.py ─ signals, sizing, top-ups    │ │
+│  └──────────▲───────────┘                   │  orders.py ─ orders & trailing stops     │ │
+│             │ restart (docker.sock)         │  data_fetcher / indicators / contracts   │ │
+│             └───────────────────────────────┤  data_health_checker / gateway_monitor   │ │
+│                                             │  database.py ─ SQLite (data/trading.db)  │ │
+│                                             └───────────────────┬──────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┼────────────────────────┘
+                                                                  ▼
+                                                    Telegram (alerts + commands)
 ```
 
-## Project Structure
+**Schedule (Europe/London, so BST/GMT is handled automatically):**
+
+| When | What |
+|------|------|
+| Mon–Fri 08:00–16:30 | Market hours: data probe every 5 min, Telegram polling every 3s |
+| 14:00 | Daily rebalance: fetch 1Y of daily bars → signals → targets → orders |
+| Every 4h after the last check/rebalance | Intraday risk check: order parity, NLV reconcile, daily-loss check |
+| 16:25 | Daily summary to Telegram |
+| Outside hours | Answers Telegram commands only |
+
+There is no exchange-holiday calendar. On a UK bank holiday the rebalance runs on the
+previous session's bars, and its orders wait for the next open.
+
+---
+
+## Project structure
 
 ```
 IBKR_Bot/
 ├── src/
-│   ├── __init__.py
-│   ├── __main__.py      # Entry point
-│   ├── bot.py           # Main bot loop and scheduling
-│   ├── config.py        # Configuration management
-│   ├── connection.py    # IBKR connection handling
-│   ├── data_fetcher.py  # Historical data retrieval
-│   ├── database.py      # SQLite persistence
-│   ├── engine.py        # Decision engine and trade logic
-│   ├── indicators.py    # Technical analysis indicators
-│   ├── orders.py        # Order and position management
-│   └── telegram_bot.py  # Telegram notifications and commands
-├── data/                # SQLite database (gitignored)
-├── logs/                # Log files (gitignored)
-├── docker-compose.yml   # Docker orchestration
-├── Dockerfile           # Bot container definition
-├── requirements.txt     # Python dependencies
-├── .env.example         # Configuration template
-└── CLAUDE.md            # Development guide
+│   ├── __main__.py            # python -m src → bot.main()
+│   ├── bot.py                 # Scheduler, live execution loop, risk checks, parity,
+│   │                          #   fill notifier + ledger handlers, Telegram wiring
+│   ├── engine.py              # Signals → filtered/ranked targets → sizing, top-ups,
+│   │                          #   settled-cash gate, drawdown brakes
+│   ├── orders.py              # Order placement, trailing stops, stop replacement
+│   ├── indicators.py          # TSMOM, CSMOM, ATR, volatility (pure NumPy/pandas)
+│   ├── contracts.py           # UCITS contract registry (currency, GBX pence lines)
+│   ├── config.py              # All strategy parameters, with rationale in comments
+│   ├── connection.py          # IBKR connection manager + reconnect, FX rates
+│   ├── data_fetcher.py        # Historical bars from IBKR
+│   ├── data_health_checker.py # Market-data probe + self-heal
+│   ├── gateway_monitor.py     # Gateway restart via Docker API, 2FA/mid-login guard
+│   ├── database.py            # SQLite persistence
+│   ├── telegram_bot.py        # Notifications + command handlers
+│   ├── backtester.py          # Legacy (scalping-era) backtester
+│   └── screener.py            # Legacy US-universe screener — DISABLED, do not re-enable
+├── tests/                     # pytest suite (run in the Docker image — see Testing)
+├── data/
+│   ├── watchlist.json         # Live trading universe (loaded at startup)
+│   └── phase1_ucits_mapping.csv
+├── research/                  # Study scripts + results behind parameter decisions
+├── RESEARCH.md                # Protocol for research / strategy studies
+├── research_notes.md          # Study findings, newest first
+├── docker-compose.yml         # ib-gateway + trading-bot
+├── Dockerfile                 # python:3.12-slim, non-root, copies src/ only
+├── requirements.txt           # Pinned direct dependencies
+├── constraints.txt            # Full pinned freeze of the live image
+├── .env.example               # Configuration template
+├── .claude/skills/healthcheck # Operational health-check runbook
+└── CLAUDE.md                  # Development guide / pre-flight rules
 ```
 
-## Prerequisites
+Legacy files from the original US momentum-scalping version, kept for reference and not
+used by the live bot: `screener-cron.sh`, `scripts/`, the root-level `test_*.py` smoke
+scripts, `DYNAMIC_INSTRUMENTS_BRIEF.md`, `CLAUDE_LOCAL.md` and `bot-health-check-prompt.md`.
 
-- **IBKR Account** with API access enabled
-- **Docker** and Docker Compose (for containerised deployment)
-- **Python 3.12+** (for local development)
-- **Telegram Bot** (optional, for notifications)
+---
 
 ## Configuration
 
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
+### Environment (`.env`)
 
-2. Edit `.env` with your credentials:
-   ```bash
-   # IBKR Credentials
-   IBKR_USERNAME=your_username
-   IBKR_PASSWORD=your_password
-   IBKR_TRADING_MODE=paper  # or 'live'
+```bash
+cp .env.example .env
+```
 
-   # Telegram (optional)
-   TELEGRAM_BOT_TOKEN=your_bot_token
-   TELEGRAM_CHAT_ID=your_chat_id
-   ```
+| Variable | Used by | Description |
+|----------|---------|-------------|
+| `IBKR_USERNAME` / `IBKR_PASSWORD` | gateway | IBKR login |
+| `IBKR_TRADING_MODE` | gateway | `paper` or `live`: which IBKR account the **gateway logs into** |
+| `IBKR_PORT` | both | Gateway API port: `4001` live, `4002` paper |
+| `IBKR_LIVE_CONFIRMED` | bot | **The only switch for real orders.** `true` = live; anything else = dry run |
+| `IBKR_HOST` / `IBKR_CLIENT_ID` | bot | Default `127.0.0.1` / `1` |
+| `IBKR_TIMEOUT` / `IBKR_READONLY` | bot | Connect timeout (s) / read-only API session |
+| `VNC_PASSWORD` | gateway | VNC access to the gateway desktop (keep the port firewalled) |
+| `DOCKER_GID` | bot | GID of the host `docker` group, so the bot can restart the gateway (default `988`) |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | bot | Telegram alerts + commands (both required to enable) |
+| `DB_PATH` / `LOG_PATH` | bot | Default `data/trading.db` / `logs/trading.log` |
+| `WATCHLIST_PATH` | bot | Default `data/watchlist.json` |
 
-### Environment Variables
+`IBKR_TRADING_MODE` and `IBKR_LIVE_CONFIRMED` are independent. The first decides which
+account the gateway logs into; the second decides whether the bot sends orders.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `IBKR_HOST` | IBKR Gateway host | `127.0.0.1` |
-| `IBKR_PORT` | IBKR Gateway port | `4002` (paper) |
-| `IBKR_CLIENT_ID` | API client ID | `1` |
-| `IBKR_TRADING_MODE` | `paper` or `live` | `paper` |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token | - |
-| `TELEGRAM_CHAT_ID` | Telegram chat ID | - |
-| `DB_PATH` | SQLite database path | `data/trading.db` |
-| `LOG_PATH` | Log file path | `logs/trading.log` |
+### Strategy parameters
+
+All strategy parameters live in `TradingConfig` in `src/config.py`: slots, per-name
+and class caps, ATR multiplier, volatility floor, cooldown, top-up gates, drawdown and
+daily-loss limits, and rebalance time. The comments record why each value was chosen.
+The risk limits scale with NLV **except `max_daily_loss`**, which is a fixed GBP amount
+and needs re-bumping if capital changes.
+
+### Adding an instrument
+
+1. Add it to `CONTRACT_REGISTRY` in `src/contracts.py` with its currency and primary
+   exchange. Check `ContractDetails.priceMagnifier` first: a GBP line with
+   magnifier 100 must be registered as `GBX`.
+2. Add the symbol to the right class in `data/watchlist.json`.
+3. Recreate the bot container (see below). The universe is loaded at startup.
+
+---
 
 ## Deployment
 
-### Docker (Recommended)
+### Docker
 
 ```bash
-# Start all services (IB Gateway + Trading Bot)
-docker compose up -d
-
-# View logs
-docker compose logs -f trading-bot
-
-# Stop services
-docker compose down
+docker compose up -d                          # start gateway + bot
+docker compose logs -f trading-bot            # follow the bot
 ```
 
-**Important:** When changing `.env` values, you must rebuild:
-```bash
-docker compose down && docker compose up -d --build
-```
+The bot container runs `python -m src.bot --interval 60`.
 
-### Local Development
+**Code or `.env` changes: rebuild only the bot.**
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run bot (requires TWS or IB Gateway running locally)
-python -m src.bot --interval 5
+docker compose up -d --build trading-bot
 ```
 
-### Command Line Options
+This rebuilds the image and reloads `.env` while leaving `ib-gateway` logged in.
+
+- `docker compose restart` does **not** reload `.env`.
+- A full `docker compose down` also stops the gateway, which forces a fresh IBKR login
+  and a **manual 2FA approval on IBKR Mobile**.
+
+**2FA:** the gateway soft-restarts nightly at 23:55 and usually re-authenticates on its
+own, but IBKR asks for 2FA at least weekly (Sunday night). There is no TOTP key
+configured, so approve the push on IBKR Mobile. The bot won't restart the gateway while
+that approval is pending.
+
+**Server-side stops survive everything:** trailing stops are GTC orders at IBKR, so
+positions stay protected through bot restarts and rebuilds.
+
+### Deploy flow
+
+commit → `git push` → on the server `git pull` → `docker compose up -d --build trading-bot`
+→ verify the startup log shows:
+
+- `Subscribed to commissionReportEvent` and `Subscribed to orderStatusEvent`
+- `Order-parity: OK`
+- `NLV reconcile … drift` < 1%
+- `Daily P&L:` inside the cap
+
+Back up `data/trading.db` before any change that writes to it.
+
+### Local run
+
+Needs Python **3.12** (ib_insync fails to import on 3.14) and a running TWS or IB Gateway.
 
 ```bash
-python -m src.bot [OPTIONS]
+python3.12 -m venv venv && source venv/bin/activate
+pip install -c constraints.txt -r requirements.txt
 
-Options:
-  --once          Run analysis once and exit
-  --interval N    Run every N minutes (default: 5)
-  --live          Enable live trading (default: dry run)
+python -m src.bot --once                 # one dry-run analysis cycle, then exit
+python -m src.bot --interval 60          # scheduled loop (dry run)
 ```
 
-## Telegram Integration
+| Option | Description |
+|--------|-------------|
+| `--once` | Connect, reconcile stops, run one rebalance cycle, exit |
+| `--interval N` | Minutes between checks (default `60`) |
+| `--live` | Request live mode. Still refuses to start unless `IBKR_LIVE_CONFIRMED=true` |
+| `--log-file PATH` | Log file (default `logs/trading.log`) |
 
-The bot supports Telegram for notifications and commands.
+---
 
-### Notifications
+## Telegram
 
-- Trade opportunities detected
-- Paper trades opened/closed
-- Stop loss and take profit hits
-- Daily performance summaries
-- Connection failure alerts
-
-### Commands
-
-Send these commands to your Telegram bot:
+**Commands**
 
 | Command | Description |
 |---------|-------------|
-| `/positions` | Show open paper trades |
-| `/stats` | Show trading statistics |
-| `/help` | List available commands |
+| `/positions` (`/status`, `/pos`) | Open positions with live P&L and stop levels |
+| `/balance` | Live IBKR account balance |
+| `/markets` | Current signals across the watchlist |
+| `/health` | Connection and bot health |
+| `/pnl` | Today's realized + unrealized P&L (IBKR session figures) and % of the daily cap used |
+| `/stats` (`/performance`) | Closed-trade statistics from the live ledger: win rate, payoff, best/worst |
+| `/history` | Equity curve and recent stop-fill exits |
+| `/help` (`/start`) | Command list |
+
+**Alerts:** bot start/stop, trade opportunities, entries placed, protective stops filled
+(with realized P&L), stops placed by reconciliation, orphan stops, NLV drift, daily-loss
+and drawdown halts, gateway 2FA waiting for approval, connection failures, and a daily
+summary.
+
+---
 
 ## Database
 
-The bot uses SQLite for persistence:
+SQLite at `data/trading.db` (gitignored).
 
-- **OHLCV Data** - Historical price data cache
-- **Trade Log** - All executed trades
-- **Paper Trades** - Simulated trade tracking with P&L
-- **Cooldowns** - Symbol-level trading cooldowns
-- **Daily Counts** - Trade count limits per symbol
+| Table | Contents |
+|-------|----------|
+| `trades` | Order ledger: every placed order plus per-fill stop executions. `status` ∈ `SUBMITTED` / `FILLED` / `CANCELLED` / `REJECTED`; `pnl`, `commission`, `currency` on stop fills |
+| `instrument_signals` | Per-day TSMOM / CSMOM / combined score, price, ATR, volatility for each instrument |
+| `portfolio_snapshots` | Equity, peak equity, drawdown at each rebalance |
+| `symbol_cooldowns` | Re-entry cooldown windows set by stop fills |
+| `ohlcv` | Cached daily bars |
+| `paper_trades` | Dry-run simulated trades only (empty in live mode) |
 
-## Market Hours
+`SUBMITTED` rows in `trades` should match the stop orders currently working at IBKR.
 
-The bot only operates during US market hours:
-- **Open:** 9:30 AM Eastern
-- **Close:** 4:00 PM Eastern
-- **Days:** Monday to Friday (excludes holidays)
-
-Outside these hours, the bot sleeps and does not attempt to connect to IBKR (prevents weekend login lockouts).
+---
 
 ## Monitoring
 
-### Logs
-
 ```bash
-# Docker logs
-docker compose logs -f trading-bot
-
-# Log file (if running locally)
+# Full log history (docker logs only covers the current container)
 tail -f logs/trading.log
+
+# Latest signals
+sqlite3 data/trading.db "SELECT symbol, ROUND(combined_score,2), price, ROUND(atr_value,3), ROUND(volatility,3)
+  FROM instrument_signals WHERE signal_date=(SELECT MAX(signal_date) FROM instrument_signals)
+  ORDER BY combined_score DESC LIMIT 10;"
+
+# Ledger state
+sqlite3 data/trading.db "SELECT status, COUNT(*) FROM trades GROUP BY status;"
+
+# Equity & drawdown
+sqlite3 data/trading.db "SELECT created_at, equity, peak_equity, drawdown FROM portfolio_snapshots ORDER BY id DESC LIMIT 5;"
 ```
 
-### Database Queries
+Useful log lines: `=== DAILY REBALANCE ===`, `Order-parity:`, `NLV reconcile`,
+`Daily P&L:`, `Protective stop FILLED`, `Post-rebalance stop sweep`, `Ledger:`.
+
+For live broker state, use a **separate read-only session**. Pick any clientId other
+than `1`, which is the bot's, and connect with `readonly=True`.
+
+The full operational runbook is `.claude/skills/healthcheck/SKILL.md`. It covers
+process, logs, signals, positions and stop coverage, parity, NLV, P&L, deploy parity
+and firewall.
+
+---
+
+## Testing
+
+Because the bot trades live only, tests exercise the **real code paths**. Engine,
+orders and bot objects are built with `__new__` plus `SimpleNamespace`/mock
+dependencies, and many tests replay real production snapshots and IBKR messages. Run
+the suite **inside the Docker image** (Python 3.12):
 
 ```bash
-# Recent paper trades
-sqlite3 data/trading.db "SELECT * FROM paper_trades ORDER BY id DESC LIMIT 10;"
-
-# Open positions
-sqlite3 data/trading.db "SELECT * FROM paper_trades WHERE status = 'OPEN';"
-
-# Trade statistics
-sqlite3 data/trading.db "SELECT COUNT(*), SUM(pnl_amount) FROM paper_trades WHERE status != 'OPEN';"
+docker run --rm --user root -v "$PWD/tests:/app/tests:ro" ibkr_bot-trading-bot:latest \
+  sh -c 'pip install -q pytest; cd /app && python -m pytest tests -q'
 ```
 
-## Dependencies
+To test uncommitted source without rebuilding, also mount `src`: `-v "$PWD/src:/app/src:ro"`.
 
-| Package | Purpose |
-|---------|---------|
-| `ib_insync` | Interactive Brokers API wrapper |
-| `pandas` | Data manipulation |
-| `numpy` | Numerical computations |
-| `python-telegram-bot` | Telegram integration |
-| `python-dotenv` | Environment variable management |
+Every test is expected to pass; any failure is a regression. (`make test` still runs
+the legacy root-level smoke scripts, not this suite.)
+
+Research and parameter studies follow `RESEARCH.md`, and their results are recorded in
+`research_notes.md` and `research/`.
+
+---
 
 ## Troubleshooting
 
-### Connection Issues
+| Symptom | Cause / fix |
+|---------|-------------|
+| BUY rejected **Error 201**, "PRIIPs/KID" | US-listed ETF. Only trade UCITS lines from `contracts.py` |
+| BUY rejected **Error 201**, "Available settled cash" | Sale proceeds not settled yet. The bot trims or skips and retries next rebalance |
+| SELL stop rejected **Error 201**, "short in cash account" | Stop placed before the BUY filled. The entry-race wait prevents this; reconcile heals it |
+| **Error 10147** cancelling a stop | Orders can only be cancelled by the clientId that placed them (the bot's `1`) |
+| **Error 10243** | Fractional shares aren't available through the API; sizes round to whole shares |
+| A pence-quoted ETF looks unaffordable | It's a GBX line (priceMagnifier 100). Register it as `GBX` |
+| Bot sees no data at the open on a Monday | Gateway waiting for weekly 2FA. Approve on IBKR Mobile |
+| `.env` change had no effect | Recreate the container with `up -d --build trading-bot`, not `restart` |
+| Log greps come back empty after a deploy | `docker logs` only spans the current container. Use `logs/trading.log` |
 
-1. **"Too many failed login attempts"** - Wait 15 minutes, then restart. Often caused by weekend connection attempts.
+**Manually closing a bot-held position.** The GTC stop reserves the shares, so a
+second SELL is rejected, and only clientId 1 can cancel that stop. Steps:
 
-2. **Gateway unhealthy** - Check IB Gateway logs:
-   ```bash
-   docker compose logs ib-gateway
-   ```
+1. `docker stop trading-bot`. The other positions' stops stay live at IBKR.
+2. In a temporary container on the gateway network, connect as clientId 1, cancel the
+   stop, then send the market SELL.
+3. `docker start trading-bot`. Startup reconciliation re-verifies the rest of the book.
 
-3. **Connection refused** - Ensure IB Gateway is healthy before starting the bot.
-
-### No Trades Executing
-
-1. Check market hours (bot only trades 9:30 AM - 4:00 PM ET)
-2. Verify signal strength meets threshold (currently 50%)
-3. Check volume requirements (need >= average volume)
-4. Review trend requirement (BULLISH only)
+---
 
 ## Disclaimer
 
 This software is for educational purposes only. Trading involves substantial risk of loss and is not suitable for all investors. Past performance does not guarantee future results. The authors are not responsible for any financial losses incurred through use of this software.
 
-**Always test thoroughly with paper trading before considering live deployment.**
+At this account size, fixed commissions are a major cost, and the momentum signal has
+not yet shown a statistically measurable edge on the live record (see
+`research_notes.md`). Treat this as an engineering project, not an investment
+recommendation.
 
 ## License
 
