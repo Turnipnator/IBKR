@@ -124,6 +124,9 @@ large edge.
 | 2 | 2026-09-15 | Monthly trend timing, 5 asset classes (`2026-09-15_monthly_allocation/PREREG_2_gtaa.md`) | Fail (boxes 1, 2, 3, 5) |
 | 3 | 2026-09-15 | Dual momentum (`2026-09-15_monthly_allocation/PREREG_3_dual_momentum.md`) | Fail (boxes 1, 2, 5) |
 | 4 | 2026-09-15 | Volatility-targeted 60/40 (`2026-09-15_monthly_allocation/PREREG_4_vol_target_6040.md`) | Fail (boxes 1, 5) |
+| 5 | 2026-09-15 | US absolute momentum, 1928–2007 (`2026-09-15_long_history_uk/PREREG_5_us_absolute_momentum.md`) | Registered, not yet run |
+| 6 | 2026-09-15 | US 10-month trend timing, 1928–2007 (`2026-09-15_long_history_uk/PREREG_6_us_trend_timing.md`) | Registered, not yet run |
+| 7 | 2026-09-15 | UK dual momentum, 2008–2026 (`2026-09-15_long_history_uk/PREREG_7_uk_dual_momentum.md`) | Registered, not yet run |
 
 ### Data already seen
 
