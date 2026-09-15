@@ -2,6 +2,12 @@
 
 Follow this protocol when undertaking any research, strategy analysis, or market investigation task.
 
+**Strategy tests are pre-registered.** Before testing a new trading strategy, or a change to
+an existing one, copy `research/PREREGISTRATION_TEMPLATE.md` into the study folder, fill in
+sections 1–9, and commit it before running anything that looks at returns. Judge the result
+only against the pass mark written there. Re-tuning on the same data after a fail is a new
+attempt, not a fix.
+
 ---
 
 ## 1. Decompose First

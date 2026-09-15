@@ -5,6 +5,8 @@ only `src/` into the image, and pytest discovers `tests/` only — so these file
 never reach the running container.
 
 - `../RESEARCH.md` — the protocol to follow for any research or strategy study.
+- `PREREGISTRATION_TEMPLATE.md` — fill in and commit before any new strategy test; holds the
+  attempts ledger and the record of which data has already been looked at.
 - `../research_notes.md` — running findings, newest study first (the protocol
   asks for this file at the repo root).
 - `<date>_<topic>/` — the script and results behind each study, kept so a
