@@ -120,7 +120,44 @@ Attempt 12 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-17, rules `0fbd7b1`, code `8a174f9`; 1,000 runs for each comparison.
+  Training 2006-10-27 → 2016-12-30 (the card said 2006-10-02; the 25-day eligibility rule makes the first
+  tradeable day three weeks later), test 2017-01-03 → 2026-09-10, **169 round trips**.
+- **Headline:** the per-stock version made **CAGR +26.1%, Sharpe 0.81**, total +840%, worst fall −42.5%,
+  60% winners, **+1.68% net per trade**. The single global rule (3-day loser, hold 3 days) made CAGR +22.8%,
+  Sharpe 0.79 over 475 trades with a −65.0% worst fall. **Equal-weight buy-and-hold of the same ten:
+  CAGR +36.2%, Sharpe 1.29, worst fall −36.6%.**
 - **Figure for each §6 box:**
-- **The overfitting tax (§7):**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random names | ≤0.417% of runs as good | **31.20%** (random median 0.70, 95th 1.04) | ✗ |
+  | 2 Per-stock beats the global rule | higher test Sharpe | 0.81 vs 0.79 | ✓ |
+  | 3 Beats buy-and-hold | higher Sharpe, or half the fall with CAGR within 2 points | Sharpe 0.81 vs 1.29; fall −42.5% vs −36.6%; CAGR +26.1% vs +36.2% | ✗ |
+  | 4 Enough trades | ≥100 | 169 | ✓ |
+  | 5 Sub-periods | ≥3 of 4 positive | 4 of 4 (+144.4%, +30.1%, +164.4%, +11.7%) | ✓ |
+  | 6 Stress slippage | ≤0.417% at 15 bps | 31.00% (Sharpe falls to 0.72) | ✗ |
+  | 7 Random timing | ≤0.417% of shifted runs as good | **1.60%** (shifted median 0.16) | ✗ |
+  | 8 Fidelity | two implementations agree | 0 disagreements over 169 trades; every entry the open after its signal | ✓ |
+
+- **The overfitting tax (§7):** the global rule decayed the textbook way — **training Sharpe 0.95 → test 0.79**.
+  The per-stock version went 0.62 → 0.81, which looks like the opposite but is not a good sign: its training
+  figure is low because ten different rules compete for the single slot and crowd each other out, while each
+  share's *own* training Sharpe was 0.50–1.08. What matters is where both landed: **0.79 and 0.81, against a
+  random-name median of 0.70.** Fitting 640 combinations bought roughly a tenth of a Sharpe point over picking
+  names out of a hat, and that tenth is well inside the noise (the random-name 95th percentile is 1.04).
+- **What the ten shares chose:** five wanted to buy strength (AAPL, AMZN, META, GOOGL, AVGO) and five to buy
+  weakness (MSFT, NVDA, TSLA, JPM, XOM) — eight distinct combinations among the ten, with only MSFT/JPM and
+  AAPL/GOOGL agreeing. That disagreement was the thing being tested, and the test decade says it was ten
+  separate accidents of 2006–2016, not ten personalities.
+- **Decision:** **Fail** (boxes 1, 3, 6 and 7). Box 2 technically passed by 0.02 of a Sharpe point, which is
+  noise; per-stock tuning did not beat one global rule in any meaningful sense. Not re-tuned on this data.
+- **Costs were never the problem — again.** +1.68% net per trade against an 18.5 bps toll, the same finding as
+  attempt 11. Every version of this made money in absolute terms. Every version also lost to simply holding the
+  ten names, which returned +36.2% a year over the test decade with a smaller drawdown.
+- **The survivorship point, stated plainly:** these are 2026's ten largest US companies looking backwards, so
+  +36% a year for buy-and-hold is not an achievable benchmark either — it is what the winners did. That is
+  exactly why box 1 compares against random names drawn from the same ten, and 31% of those runs matched.
+- **Disclosure:** a 5-seed smoke run printed a verdict before two conformance fixes landed (`8a174f9`: the test
+  window had run four days past the card's end date, and box 8's second implementation was not yet wired in).
+  Both fixes make the test stricter. No rule, window, grid or pass mark was changed in response.

@@ -1,0 +1,113 @@
+{
+ "git_commit": "8a174f9",
+ "run_utc": "2026-09-17 11:40:08",
+ "windows": {
+  "train": [
+   "2006-10-27",
+   "2016-12-30"
+  ],
+  "test": [
+   "2017-01-03",
+   "2026-09-10"
+  ]
+ },
+ "threshold": 0.004166666666666667,
+ "n_null": 1000,
+ "verdict": {
+  "passed": false,
+  "boxes": {
+   "1 per-stock beats random names": {
+    "ok": false,
+    "detail": "31.20% of 1000 random-name runs have Sharpe >= 0.81 (need <= 0.417%)"
+   },
+   "2 per-stock beats the global rule": {
+    "ok": true,
+    "detail": "test Sharpe 0.81 vs 0.79"
+   },
+   "3 beats buy-and-hold": {
+    "ok": false,
+    "detail": "Sharpe 0.81 vs 1.29; worst fall -42.4% vs -36.6%; CAGR +26.1% vs +36.2%"
+   },
+   "4 enough trades": {
+    "ok": true,
+    "detail": "169 round trips in the test window"
+   },
+   "5 sub-periods": {
+    "ok": true,
+    "detail": "4 of 4 positive: +144.4%, +30.1%, +164.4%, +11.7%"
+   },
+   "6 stress slippage": {
+    "ok": false,
+    "detail": "31.00% of random-name runs at 15 bps have Sharpe >= 0.72"
+   },
+   "7 random timing": {
+    "ok": false,
+    "detail": "1.60% of shifted runs have Sharpe >= 0.81"
+   },
+   "8 fidelity": {
+    "ok": true,
+    "detail": "0 disagreement(s) between the two implementations over 169 trades; every entry is the open of the day after its signal, every fill a real bar"
+   }
+  },
+  "per_stock_test": {
+   "sharpe": 0.8095487077262135,
+   "total_return": 8.395150921386499,
+   "cagr": 0.2609171432809012,
+   "maxdd": -0.4244608904348335,
+   "trades": 169,
+   "win_rate": 0.5976331360946746,
+   "avg_per_trade": 0.016837934481878813,
+   "skipped": "set()"
+  },
+  "global_test": {
+   "sharpe": 0.789426573926072,
+   "total_return": 6.294977058007273,
+   "cagr": 0.22832983968271892,
+   "maxdd": -0.6495028611903516,
+   "trades": 475,
+   "win_rate": 0.5515789473684211,
+   "avg_per_trade": 0.005232478018421162,
+   "skipped": "set()"
+  },
+  "benchmark": {
+   "sharpe": 1.2908085839606518,
+   "cagr": 0.3617406116862505,
+   "maxdd": -0.36633851763470926,
+   "total_return": 18.75666551764186
+  },
+  "overfitting_tax": {
+   "per_stock": {
+    "train": 0.6205127790894447,
+    "test": 0.8095487077262135
+   },
+   "global_rule": {
+    "train": 0.9530679774067643,
+    "test": 0.789426573926072
+   }
+  },
+  "chosen": {
+   "global_rule": "(3, 'loser', ('hold', 3))",
+   "per_stock": {
+    "AAPL": "(10, 'winner', ('hold', 20))",
+    "MSFT": "(3, 'loser', ('hold', 20))",
+    "NVDA": "(3, 'loser', ('trail', 2.0))",
+    "AMZN": "(20, 'winner', ('hold', 5))",
+    "META": "(20, 'winner', ('hold', 20))",
+    "GOOGL": "(10, 'winner', ('hold', 20))",
+    "TSLA": "(3, 'loser', ('hold', 5))",
+    "AVGO": "(3, 'winner', ('hold', 5))",
+    "JPM": "(3, 'loser', ('hold', 20))",
+    "XOM": "(10, 'loser', ('hold', 5))"
+   }
+  },
+  "null_names": {
+   "p50": 0.7027345802016868,
+   "p95": 1.0386952712357247
+  },
+  "null_timing": {
+   "p50": 0.1564525739402215,
+   "p95": 0.5898776257185911
+  }
+ },
+ "runtime_s": 1176.0967304706573
+}

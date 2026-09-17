@@ -4,6 +4,61 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-17 — Tuned entry/exit per stock, ten US mega-caps (attempt 12, fail)
+
+**Question.** The account owner's own proposal: hold ten well-known names and work out the entry and exit rule
+for each one. Does a rule fitted to each share beat a single rule applied to all ten — judged on data neither
+rule was fitted to?
+
+**Why it needs a train/test split.** 64 rule combinations across 10 shares is **640 choices**. At a 5%
+false-positive rate roughly 32 of them look excellent on past data through luck alone, so an in-sample table of
+"the best rule for each stock" is guaranteed to exist and guaranteed to mean nothing. The card therefore fits on
+2006-10-27 → 2016-12-30 and runs **once** on 2017-01-03 → 2026-09-10.
+
+**Method.** Pre-registered in `research/2026-09-17_tuned/PREREG_12…` (rules `0fbd7b1`, code `8a174f9`) before any
+returns existed. AAPL, MSFT, NVDA, AMZN, META, GOOGL, TSLA, AVGO, JPM, XOM on the attempt 11 daily bars. Grid:
+lookback 3/5/10/20 × buy-the-winner or buy-the-loser (that share's own N-day return above/below zero) × eight
+exits (fixed hold 3/5/10/20, or a 1/2/3/4 × ATR(20) trailing stop with a 40-day cap) = 64 per share. Entry at the
+next day's open, one position at a time, largest absolute move wins the slot. £2,000 notional, $1 a side, 5 bps
+slippage (15 stress). 1,000 random-name and 1,000 random-timing runs, threshold 0.417%.
+
+**Result — fail (boxes 1, 3, 6, 7).** Per-stock: CAGR **+26.1%**, Sharpe **0.81**, worst fall −42.5%, 169 trades,
+60% winners, **+1.68% net per trade**. Global rule (3-day loser, hold 3): CAGR +22.8%, Sharpe 0.79, 475 trades,
+worst fall −65.0%. Buy-and-hold the ten: **CAGR +36.2%, Sharpe 1.29, worst fall −36.6%**.
+
+| Box | Needed | Got | |
+|---|---|---|---|
+| 1 Beats random names | ≤0.417% | **31.2%** (median 0.70, 95th 1.04) | ✗ |
+| 2 Per-stock beats global | higher test Sharpe | 0.81 vs 0.79 | ✓ (noise) |
+| 3 Beats buy-and-hold | — | Sharpe 0.81 vs 1.29 | ✗ |
+| 4 Enough trades | ≥100 | 169 | ✓ |
+| 5 Sub-periods | ≥3 of 4 | 4 of 4 | ✓ |
+| 6 Stress slippage | ≤0.417% | 31.0% | ✗ |
+| 7 Random timing | ≤0.417% | 1.6% (shifted median 0.16) | ✗ |
+| 8 Fidelity | agree | 0 disagreements / 169 trades | ✓ |
+
+**The overfitting tax.** The global rule decayed the textbook way: training Sharpe **0.95 → 0.79**. The per-stock
+version went 0.62 → 0.81 — not a reversal of the tax, but an artefact of ten rules competing for one slot in
+training (each share's own training Sharpe was 0.50–1.08). Both landed at ~0.8 against a **random-name median of
+0.70**: 640 fitted choices bought about a tenth of a Sharpe point, well inside the noise.
+
+**What the shares chose.** Five wanted strength (AAPL, AMZN, META, GOOGL, AVGO), five wanted weakness (MSFT,
+NVDA, TSLA, JPM, XOM); eight distinct combinations among ten, with only MSFT/JPM and AAPL/GOOGL agreeing. That
+disagreement is what the card was testing, and the test decade says it was ten accidents of 2006–2016.
+
+**Takeaways.**
+- **Per-stock tuning is not the missing piece.** It is the most reliable way to manufacture a beautiful backtest,
+  and the train/test split is what exposes it. This is now measured on this account's own universe, not asserted.
+- **Costs cleared comfortably for the second time** (+1.68%/trade vs an 18.5 bps toll). Every failure since
+  attempt 10 has been *selection*, not economics.
+- **The benchmark keeps winning and the benchmark is not real.** +36%/yr for buy-and-hold is what 2026's ten
+  largest US companies did looking backwards; the random-name null drawn from the same ten is the honest
+  comparison, and 31% of those runs matched the tuned strategy.
+- **Disclosure:** a 5-seed smoke printed a verdict before two conformance fixes (`8a174f9`) landed; both made the
+  test stricter, and no rule or pass mark was changed in response.
+
+---
+
 ## 2026-09-17 — Weekly short-term reversal (attempt 11, fail — but the cost thesis held)
 
 **Question.** Attempt 10 showed the account's cost floor (~16 bps a round trip) kills anything chasing a 5 bps

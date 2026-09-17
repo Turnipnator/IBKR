@@ -131,7 +131,7 @@ large edge.
 | 9 | 2026-09-17 | UCITS forward test of US absolute momentum, live sleeve (`2026-09-17_forward_test/PREREG_9_ucits_forward_test.md`) | Registered; forward test, no statistical threshold |
 | 10 | 2026-09-17 | Intraday momentum on US shares, long-only (`2026-09-17_intraday/PREREG_10_intraday_momentum.md`) | Fail (boxes 1, 4, 5) — the move is ~5 bps, the round trip costs ~16 bps |
 | 11 | 2026-09-17 | Weekly short-term reversal on 40 US shares, long-only (`2026-09-17_reversal/PREREG_11_short_term_reversal.md`) | Fail (boxes 1, 2, 3, 6) — cleared costs (+18%/yr) but no better than random names from the same list |
-| 12 | 2026-09-17 | Tuned entry/exit on 10 US shares, global vs per-stock, train 2006–2016 / test 2017–2026 (`2026-09-17_tuned/PREREG_12_tuned_entry_exit.md`) | Registered, not yet run |
+| 12 | 2026-09-17 | Tuned entry/exit on 10 US shares, global vs per-stock, train 2006–2016 / test 2017–2026 (`2026-09-17_tuned/PREREG_12_tuned_entry_exit.md`) | Fail (boxes 1, 3, 6, 7) — 31% of random-name runs matched it; buy-and-hold the ten beat every version |
 
 ### Data already seen
 
