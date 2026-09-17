@@ -43,6 +43,7 @@ SLIP_BPS, STRESS_BPS = 5.0, 15.0
 NOTIONAL_GBP, GBP_PER_USD = 2000.0, 0.75
 TRAIN_END = pd.Timestamp("2016-12-30")
 TEST_START = pd.Timestamp("2017-01-03")
+TEST_END = pd.Timestamp("2026-09-10")  # the card's window; later bars exist but are not used
 
 G = {}
 
@@ -147,7 +148,7 @@ def run_trade(sym, entry_idx, exit_rule, slip_bps, force_name=None):
 def simulate(rule_for, lo, hi, slip_bps, name_override=None, shift=0):
     """rule_for: symbol -> (n, direction, exit). One position at a time between indices lo..hi."""
     rets = np.zeros(hi - lo + 1)
-    trades, wins = [], 0
+    trades, wins, skipped = [], 0, set()
     t = lo
     while t <= hi:
         best = None
@@ -170,6 +171,7 @@ def simulate(rule_for, lo, hi, slip_bps, name_override=None, shift=0):
         chosen = name_override(entry_idx) if name_override else sym
         out = run_trade(sym, entry_idx, rule_for[sym][2], slip_bps, force_name=chosen)
         if out is None:
+            skipped.add(t)
             t += 1
             continue
         ret, exit_idx = out
@@ -188,7 +190,55 @@ def simulate(rule_for, lo, hi, slip_bps, name_override=None, shift=0):
                 maxdd=float((equity / peaks - 1.0).min()), trades=len(trades),
                 win_rate=float(wins / len(trades)) if trades else 0.0,
                 avg_per_trade=float(np.mean([x["ret"] for x in trades])) if trades else 0.0,
-                rets=rets, trade_list=trades)
+                rets=rets, trade_list=trades, skipped=skipped)
+
+
+def fidelity_check(rule_for, lo, hi, trades, skipped):
+    """Independent vectorised rebuild of the signal layer; audits the trade list the loop produced.
+
+    Different code path on purpose: pandas shift/compare over whole columns instead of the day loop's
+    scalar indexing. It re-derives which share should have been bought on each entry day and checks that
+    no earlier eligible signal was passed over.
+    """
+    C, O = G["C"], G["O"]
+    n_days = len(C)
+    pos = np.arange(n_days)
+    fires, strength = {}, {}
+    for sym, (n, direction, _) in rule_for.items():
+        col = C[sym]
+        base = col.shift(n)
+        r = col / base - 1.0
+        hit = (r > 0) if direction == "winner" else (r < 0)
+        elig = col.notna() & (col.notna().cumsum() >= MIN_HISTORY) & pd.Series(pos >= MIN_HISTORY, index=col.index)
+        fires[sym] = (hit & r.notna() & (base > 0) & elig).to_numpy()
+        strength[sym] = r.abs().to_numpy()
+
+    def winner_on(day):
+        cands = [(strength[x][day], x) for x in UNIVERSE if x in rule_for and fires[x][day]]
+        if not cands:
+            return None
+        return sorted(cands, key=lambda z: (-z[0], z[1]))[0][1]
+
+    problems, prev_exit = [], lo - 1
+    for tr in trades:
+        sym, entry, sig = tr["symbol"], tr["entry"], tr["entry"] - 1
+        if sig < lo or entry > hi:
+            problems.append(f"{sym} {entry}: outside the window")
+            continue
+        if not fires[sym][sig]:
+            problems.append(f"{sym}: no signal on day {sig}")
+        elif winner_on(sig) != sym:
+            problems.append(f"{sym} {sig}: {winner_on(sig)} had the larger move")
+        for t in range(prev_exit + 1, sig):
+            if t not in skipped and winner_on(t) is not None:
+                problems.append(f"day {t}: signal skipped before the {sym} trade")
+                break
+        if not np.isfinite(O[sym].iat[entry]):
+            problems.append(f"{sym} {entry}: entry price is not a real bar")
+        if entry <= sig:
+            problems.append(f"{sym}: entry {entry} is not after the signal day {sig}")
+        prev_exit = tr["exit"]
+    return problems
 
 
 def blocks(rets):
@@ -235,7 +285,7 @@ def main():
     train_lo = MIN_HISTORY
     train_hi = int(cal.get_indexer([cal[cal <= TRAIN_END][-1]])[0])
     test_lo = int(cal.get_indexer([cal[cal >= TEST_START][0]])[0])
-    test_hi = len(cal) - 1
+    test_hi = int(cal.get_indexer([cal[cal <= TEST_END][-1]])[0])
     print(f"train {cal[train_lo].date()} -> {cal[train_hi].date()} | test {cal[test_lo].date()} -> {cal[test_hi].date()}", flush=True)
 
     # ---- choose rules on TRAINING data only
@@ -295,6 +345,7 @@ def main():
         time_sh[seed] = simulate(per_rule, test_lo, test_hi, SLIP_BPS, shift=int(rng.integers(5, max(6, span // 4))))["sharpe"]
     share_time = float((time_sh >= per_test["sharpe"]).mean())
 
+    problems = fidelity_check(per_rule, test_lo, test_hi, per_test["trade_list"], per_test["skipped"])
     pos_blocks = sum(1 for x in blocks(per_test["rets"]) if x > 0)
     b3 = per_test["sharpe"] > bench["sharpe"] or (per_test["maxdd"] >= 0.5 * bench["maxdd"] and per_test["cagr"] >= bench["cagr"] - 0.02)
     boxes = {
@@ -305,7 +356,9 @@ def main():
         "5 sub-periods": (pos_blocks >= 3, f"{pos_blocks} of 4 positive: " + ", ".join(f"{x:+.1%}" for x in blocks(per_test["rets"]))),
         "6 stress slippage": (share_names_stress <= THRESHOLD, f"{share_names_stress:.2%} of random-name runs at 15 bps have Sharpe >= {per_stress['sharpe']:.2f}"),
         "7 random timing": (share_time <= THRESHOLD, f"{share_time:.2%} of shifted runs have Sharpe >= {per_test['sharpe']:.2f}"),
-        "8 fidelity": (True, "entries are the open of the day after the signal; every fill comes from a real bar"),
+        "8 fidelity": (not problems, f"{len(problems)} disagreement(s) between the two implementations over "
+                                    f"{per_test['trades']} trades" + (f"; first: {problems[0]}" if problems else
+                                    "; every entry is the open of the day after its signal, every fill a real bar")),
     }
     tax = dict(per_stock=dict(train=per_train["sharpe"], test=per_test["sharpe"]),
                global_rule=dict(train=glob_train["sharpe"], test=glob_test["sharpe"]))
