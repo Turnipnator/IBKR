@@ -132,6 +132,7 @@ large edge.
 | 10 | 2026-09-17 | Intraday momentum on US shares, long-only (`2026-09-17_intraday/PREREG_10_intraday_momentum.md`) | Fail (boxes 1, 4, 5) — the move is ~5 bps, the round trip costs ~16 bps |
 | 11 | 2026-09-17 | Weekly short-term reversal on 40 US shares, long-only (`2026-09-17_reversal/PREREG_11_short_term_reversal.md`) | Fail (boxes 1, 2, 3, 6) — cleared costs (+18%/yr) but no better than random names from the same list |
 | 12 | 2026-09-17 | Tuned entry/exit on 10 US shares, global vs per-stock, train 2006–2016 / test 2017–2026 (`2026-09-17_tuned/PREREG_12_tuned_entry_exit.md`) | Fail (boxes 1, 3, 6, 7) — 31% of random-name runs matched it; buy-and-hold the ten beat every version |
+| 13 | 2026-09-17 | Post-earnings announcement drift, 40 US shares, SEC 8-K item 2.02 dates (`2026-09-17_pead/PREREG_13_earnings_drift.md`) | Registered, not yet run |
 
 ### Data already seen
 
@@ -148,6 +149,7 @@ large edge.
 | ~2024-09 → 2026-09 (intraday) | SPY and 10 US mega-caps, 30-minute bars | intraday momentum (first half-hour → last half-hour), long-only, thresholds ±0.05% | `2026-09-17_intraday/` |
 | ~2006-09 → 2026-09 (daily) | 40 large US shares | weekly short-term reversal (4, 5, 10-day lookback/hold), random-name and random-timing nulls | `2026-09-17_reversal/` |
 | 2006-10 → 2016-12 (training) / 2017-01 → 2026-09 (test) | 10 US mega-caps, daily | 64-combination grid: 3/5/10/20-day lookback × winner or loser × fixed hold or 1–4×ATR trailing stop | `2026-09-17_tuned/` |
+| 1994 → 2026 (filing dates only) | SEC EDGAR 8-K item 2.02 for the 40 attempt-11 names | announcement dates and acceptance times; never joined to price bars before attempt 13 | `2026-09-17_pead/` |
 
 IBKR serves at most 20 years of daily bars, so these proxies have no history before 2006.
 For momentum or trend rules on this universe, every available period has been looked at.
