@@ -127,6 +127,8 @@ large edge.
 | 5 | 2026-09-15 | US absolute momentum, 1928–2007 (`2026-09-15_long_history_uk/PREREG_5_us_absolute_momentum.md`) | **Pass** (all 7 boxes); next step is a UCITS card on unused data |
 | 6 | 2026-09-15 | US 10-month trend timing, 1928–2007 (`2026-09-15_long_history_uk/PREREG_6_us_trend_timing.md`) | Fail (boxes 1, 2, 5) |
 | 7 | 2026-09-15 | UK dual momentum, 2008–2026 (`2026-09-15_long_history_uk/PREREG_7_uk_dual_momentum.md`) | Fail (boxes 1, 2, 5) |
+| 8 | 2026-09-17 | Absolute momentum across 20 non-US country markets, 1975–2007 (`2026-09-17_countries/PREREG_8_country_absolute_momentum.md`) | Registered, not yet run |
+| 9 | 2026-09-17 | UCITS forward test of US absolute momentum, live sleeve (`2026-09-17_forward_test/PREREG_9_ucits_forward_test.md`) | Registered; forward test, no statistical threshold |
 
 ### Data already seen
 
@@ -139,6 +141,7 @@ large edge.
 | 2008-05 → 2026-08 | SPY, EFA, IEF, VNQ, GSG, VEU, AGG, BIL | monthly trend timing (9–11 month averages), dual momentum (11–13 month lookbacks), volatility-targeted 60/40 (8–12%, 10–42 days), static 60/40, random-timing nulls | `2026-09-15_monthly_allocation/` |
 | 1928-01 → 2007-12 | US stock market (Ken French), 10-year Treasuries built from FRED yields, T-bills | absolute momentum (11–13 months; bonds, T-bills as safe asset in robustness), 10-month trend timing (9–11), 60/40, random-timing nulls | `2026-09-15_long_history_uk/` |
 | 2008-01 → 2026-08 | ISF, IWRD, IGLT, UK 3-month interbank rate | UK dual momentum (11–13 months), 60/40 IWRD/IGLT, ISF buy-and-hold, random-timing nulls | `2026-09-15_long_history_uk/` |
+| 1975-01 → 2007-12 | 20 non-US country stock markets (Ken French International Countries, dollar returns) | country absolute momentum (11–13 months, US T-bill hurdle, US 10y Treasuries when out), equal-weight buy-and-hold, random-timing nulls | `2026-09-17_countries/` |
 
 IBKR serves at most 20 years of daily bars, so these proxies have no history before 2006.
 For momentum or trend rules on this universe, every available period has been looked at.
