@@ -267,10 +267,28 @@ def main():
           f"{len(events)} events in window, {len(qualifying)} qualifying (AR >= {AR_THRESHOLD:.1%})", flush=True)
 
     # ---- data quality (box 8)
+    # Only COMPLETE years count: the window opens in October 2006 and closes in September 2026, and a name
+    # listed mid-year has a short first year. Counting those as full years would flag every name for free.
+    full_years = {}
+    for sym in UNIVERSE:
+        dates = C.index[C[sym].notna()]
+        if len(dates) == 0:
+            continue
+        first, last = dates[0], dates[-1]
+        full_years[sym] = {y for y in range(2007, 2026)
+                           if first <= pd.Timestamp(year=y, month=1, day=31)
+                           and last >= pd.Timestamp(year=y, month=12, day=1)
+                           and cal[G["lo"]] <= pd.Timestamp(year=y, month=1, day=31)
+                           and cal[G["hi"]] >= pd.Timestamp(year=y, month=12, day=1)}
     per_year = {}
     for e in events:
-        per_year.setdefault((e["symbol"], cal[e["day0"]].year), 0)
-        per_year[(e["symbol"], cal[e["day0"]].year)] += 1
+        yr = cal[e["day0"]].year
+        if yr not in full_years.get(e["symbol"], set()):
+            continue
+        per_year[(e["symbol"], yr)] = per_year.get((e["symbol"], yr), 0) + 1
+    for sym, years in full_years.items():          # a complete year with no filing at all is a coverage gap
+        for y in years:
+            per_year.setdefault((sym, y), 0)
     counts = {}
     for (sym, yr), n in per_year.items():
         counts.setdefault(sym, []).append(n)
