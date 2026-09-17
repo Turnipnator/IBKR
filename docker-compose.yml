@@ -60,6 +60,13 @@ services:
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # Forward-test sleeve (attempt 9, research/2026-09-17_forward_test/). 'true' lets it trade;
+      # anything else and it never places an order. The bot reads these via SleeveConfig.from_env,
+      # so they have to be listed here — this service takes an explicit environment map, not env_file,
+      # and a variable that is only in .env never reaches the container.
+      SLEEVE_ENABLED: ${SLEEVE_ENABLED:-false}
+      SLEEVE_CAPITAL_BASE: ${SLEEVE_CAPITAL_BASE:-2500}
+      SLEEVE_MIN_TOPUP: ${SLEEVE_MIN_TOPUP:-500}
       # Paths
       DB_PATH: /app/data/trading.db
       LOG_PATH: /app/logs/trading.log
