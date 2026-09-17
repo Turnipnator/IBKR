@@ -151,16 +151,21 @@ class SleeveStrategy:
             return False
 
     # ------------------------------------------------------------------ trading
-    def _affordable(self, symbol: str, budget_base: float) -> int:
-        """Whole shares of `symbol` that `budget_base` covers, keeping the cash buffer."""
+    def _unit_base(self, symbol: str) -> float:
+        """What one share costs in account base currency, including the cash buffer. 0 if unknown."""
         price = (self.fetcher.get_latest_prices([symbol]) or {}).get(symbol)
         if not price or price <= 0:
-            return 0
-        from .contracts import CONTRACT_REGISTRY, GBX_PER_GBP
+            return 0.0
+        from .contracts import CONTRACT_REGISTRY
         ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
         fx = self.connection.get_fx_rates() or {}
         rate = 0.01 * fx.get("GBP", 1.0) if ccy == "GBX" else (1.0 if ccy == "GBP" else fx.get(ccy, 1.0))
         unit = float(price) * rate * (1.0 + self.config.cash_buffer)
+        return unit if unit > 0 else 0.0
+
+    def _affordable(self, symbol: str, budget_base: float) -> int:
+        """Whole shares of `symbol` that `budget_base` covers, keeping the cash buffer."""
+        unit = self._unit_base(symbol)
         if unit <= 0:
             return 0
         return int(max(0.0, budget_base) / unit)
@@ -175,6 +180,52 @@ class SleeveStrategy:
         except Exception:
             settled = None
         return reserve if settled is None else min(reserve, settled)
+
+    def _fund_target(self, month: str, target: str, retry: bool = False) -> dict:
+        """Buy as much of `target` as the reserve and settled cash allow, in sensible tranches.
+
+        Card 9 says to buy "as settled cash allows (T+2), retrying at each later close until funded",
+        so this runs whether or not the sleeve already holds some of the target — the reserve, not the
+        position, is what says the job is done. IBKR charges a flat fee per order, so a tranche must be
+        worth `min_topup_base`, unless it essentially finishes funding (>=85% of what is left), and is
+        never placed below `min_order_base`.
+
+        Returns {"status": ...}; never raises.
+        """
+        reserve = self.reserve()
+        spendable = self._spendable()
+        qty = self._affordable(target, spendable)
+        if qty < 1:
+            logger.info(
+                f"Sleeve: {target} buy deferred — reserve {reserve:,.0f} and settled cash cover 0 shares; "
+                "will retry at the next close"
+            )
+            return {"status": "pending_cash", "quantity": 0}
+        unit = self._unit_base(target)
+        value = qty * unit
+        finishes = (reserve - value) < unit      # nothing left that could buy another share
+        if (value < self.config.min_topup_base and not finishes) or value < self.config.min_order_base:
+            logger.info(
+                f"Sleeve: {target} tranche would be {value:,.0f} base of {reserve:,.0f} still to invest "
+                f"— below the {self.config.min_topup_base:,.0f} minimum and not the last tranche, waiting "
+                "for more settled cash "
+                "rather than paying a flat commission on a small order"
+            )
+            return {"status": "pending_cash", "quantity": 0}
+        reason = "sleeve entry (retry)" if retry else "sleeve entry"
+        res = self.order_manager.place_market_order(target, OrderAction.BUY, qty, reason=reason)
+        out = {"status": "buy_failed", "quantity": qty, "symbol": target,
+               "ok": bool(res.success), "order_id": res.order_id, "message": res.message}
+        if not res.success:
+            logger.error(f"Sleeve: BUY {target} failed: {res.message}")
+            return out
+        cost = (res.fill_price or 0) * (res.filled_quantity or qty)
+        self.db.record_sleeve_order(month, "BUY", target, qty, res.order_id, res.fill_price)
+        if cost:
+            left = self.db.add_sleeve_reserve(-self._to_base(target, cost))
+            logger.info(f"Sleeve: bought {qty} {target}; {left:,.0f} base still to invest")
+        out["status"] = "traded"
+        return out
 
     def rebalance(self, now_local: Optional[datetime] = None, dry_run: bool = False) -> dict:
         """Run this month's decision. Returns a summary dict; never raises."""
@@ -195,6 +246,11 @@ class SleeveStrategy:
             out["status"] = "dry_run"
             return out
 
+        # Read the reserve before anything touches it: add_sleeve_reserve() creates the row from
+        # whatever delta it is handed, so a switch-sell as the sleeve's very first action would seed
+        # the reserve at the sale proceeds instead of the capital base.
+        self.reserve()
+
         held = self.positions()
         # 1. sell anything that is not the target
         for symbol, qty in held.items():
@@ -211,27 +267,17 @@ class SleeveStrategy:
             else:
                 logger.error(f"Sleeve: SELL {symbol} failed: {res.message}")
 
-        # 2. buy the target with what the reserve and settled cash allow
-        have = held.get(sig.target, 0)
-        if have <= 0:
-            qty = self._affordable(sig.target, self._spendable())
-            if qty >= 1:
-                res = self.order_manager.place_market_order(sig.target, OrderAction.BUY, qty, reason="sleeve entry")
-                out["orders"].append({"action": "BUY", "symbol": sig.target, "quantity": qty,
-                                      "ok": bool(res.success), "order_id": res.order_id, "message": res.message})
-                if res.success:
-                    cost = (res.fill_price or 0) * (res.filled_quantity or qty)
-                    self.db.record_sleeve_order(month, "BUY", sig.target, qty, res.order_id, res.fill_price)
-                    if cost:
-                        self.db.add_sleeve_reserve(-self._to_base(sig.target, cost))
-                    out["status"] = "traded"
-                else:
-                    logger.error(f"Sleeve: BUY {sig.target} failed: {res.message}")
-                    out["status"] = "buy_failed"
-            else:
-                logger.info(f"Sleeve: {sig.target} buy deferred — settled cash covers 0 shares; will retry")
-                out["status"] = "pending_cash"
-        else:
+        # 2. put the reserve to work in the target, however much of it is currently spendable
+        funded = self._fund_target(month, sig.target)
+        if funded.get("quantity"):
+            out["orders"].append({"action": "BUY", "symbol": sig.target, "quantity": funded["quantity"],
+                                  "ok": funded.get("ok", False), "order_id": funded.get("order_id"),
+                                  "message": funded.get("message")})
+        out["status"] = funded["status"]
+        # Fully invested already: nothing pending, so say so rather than leaving the month looking
+        # like it is still waiting for cash.
+        if (out["status"] == "pending_cash" and self.positions().get(sig.target, 0) > 0
+                and self.reserve() < self.config.min_order_base):
             out["status"] = "already_held"
 
         self.db.set_sleeve_month(month, sig.target, out["status"])
@@ -249,7 +295,13 @@ class SleeveStrategy:
         return out
 
     def retry_pending(self) -> dict:
-        """Complete a buy that settled cash could not fund on the day (T+2)."""
+        """Keep funding this month's target as cash settles — the daily half of the card's rule.
+
+        Called on every loop pass during market hours, so it is guarded three ways: it does nothing
+        once the reserve is spent, nothing once a sleeve order has already gone in today (IBKR's
+        account summary is a lagging cache, so two orders in quick succession would both size off the
+        same stale settled-cash figure), and nothing for a month whose signal never resolved.
+        """
         out = {"status": "noop"}
         if not self.config.enabled:
             return out
@@ -258,25 +310,23 @@ class SleeveStrategy:
         except Exception as e:
             logger.warning(f"Sleeve: could not read month state: {e}")
             return out
-        if not state or state.get("status") != "pending_cash":
+        if not state:
             return out
         target = state.get("target")
-        if not target or self.positions().get(target, 0) > 0:
+        if not target or state.get("status") in (None, "", "signal_failed", "dry_run"):
             return out
-        qty = self._affordable(target, self._spendable())
-        if qty < 1:
+        if self.reserve() <= 0:
             return out
-        res = self.order_manager.place_market_order(target, OrderAction.BUY, qty, reason="sleeve entry (retry)")
-        if res.success:
-            cost = (res.fill_price or 0) * (res.filled_quantity or qty)
-            self.db.record_sleeve_order(state["month"], "BUY", target, qty, res.order_id, res.fill_price)
-            if cost:
-                self.db.add_sleeve_reserve(-self._to_base(target, cost))
+        try:
+            if self.db.sleeve_orders_today():
+                return out
+        except Exception as e:
+            logger.warning(f"Sleeve: could not count today's orders, skipping the retry: {e}")
+            return out
+        funded = self._fund_target(state["month"], target, retry=True)
+        if funded["status"] == "traded":
             self.db.set_sleeve_month(state["month"], target, "traded")
-            logger.info(f"Sleeve: deferred BUY {qty} {target} completed once cash settled")
-            out = {"status": "traded", "symbol": target, "quantity": qty}
-        else:
-            logger.error(f"Sleeve: retry BUY {target} failed: {res.message}")
+            out = {"status": "traded", "symbol": target, "quantity": funded["quantity"]}
         return out
 
     def _to_base(self, symbol: str, amount_local: float) -> float:

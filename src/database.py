@@ -896,6 +896,19 @@ class Database:
         state = self.get_sleeve_month(month)
         return bool(state and state.get("status") not in (None, "", "signal_failed"))
 
+    def sleeve_orders_today(self) -> int:
+        """Sleeve orders placed today (UTC). Guards the daily funding hook, which runs every loop."""
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM sleeve_orders WHERE date(created_at) = date('now')"
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+        finally:
+            conn.close()
+
     def record_sleeve_order(self, month: str, action: str, symbol: str, quantity: int,
                             order_id=None, fill_price=None):
         conn = self._get_connection()

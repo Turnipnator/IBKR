@@ -246,6 +246,10 @@ class TradingConfig:
     # from `targets` and there is no sell-loop over non-target holdings, so names
     # falling out of the top 3 simply stop being topped up and exit on their
     # existing trailing stops. The book converges 7 -> 3 as stops fire.
+    # Wind-down switch (owner's decision 2026-09-17, after attempt 13). False = compute and record
+    # signals as usual but open NO new momentum positions and no top-ups. Nothing is force-sold:
+    # existing positions keep their trailing stops and leave on them, freeing cash for the sleeve.
+    momentum_entries_enabled: bool = False   # OFF since 2026-09-17
     max_open_positions: int = 3
 
     # Universe version — bump when the instrument set changes; useful for
@@ -281,12 +285,19 @@ class SleeveConfig:
     cash_buffer: float = 0.02
     hour: int = 14                    # 14:05 Europe/London, just after the momentum rebalance
     minute: int = 5
+    # Funding tranches. The card says to buy "as settled cash allows, retrying at each later close
+    # until funded", and IBKR charges a flat max($4, 0.05%) / max(£3, 0.05%) per order — so a £500
+    # tranche costs 0.6-0.8% and a £100 one costs 3-4%. Buy £500+ at a time, or a smaller amount
+    # that essentially finishes the job, and never place an order below min_order_base.
+    min_topup_base: float = 500.0
+    min_order_base: float = 150.0
 
     @classmethod
     def from_env(cls) -> "SleeveConfig":
         return cls(
             enabled=os.getenv("SLEEVE_ENABLED", "false").lower() == "true",
             capital_base=float(os.getenv("SLEEVE_CAPITAL_BASE", "2500")),
+            min_topup_base=float(os.getenv("SLEEVE_MIN_TOPUP", "500")),
         )
 
 

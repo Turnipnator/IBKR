@@ -109,6 +109,33 @@ and a replay recomputes the same signal from IBKR bars. The comparison is live a
 
 Attempts 8 and 9 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
+## 9a. Amendments (dated, before the sleeve traded)
+
+**2026-09-17, after attempt 13 — funding and context.** Two changes, both recorded before the sleeve
+placed a single order:
+
+1. **The momentum strategy is being wound down, so the sleeve is funded from its exits.** The owner's
+   decision after attempt 13: momentum opens no new positions or top-ups
+   (`TradingConfig.momentum_entries_enabled = False`), nothing is force-sold, and each position leaves
+   on its own trailing stop. The sleeve's £2,500 reserve is therefore filled over weeks from settling
+   proceeds rather than on day one — the account had £158 of settled cash when this was written. §3's
+   rule ("buy as settled cash allows, retrying at each later close until funded") is unchanged; this
+   is the situation it was written for, and it now gets exercised properly.
+2. **Funding happens in tranches, and the minimum is stated.** IBKR charges a flat max($4, 0.05%) /
+   max(£3, 0.05%) per order, so a £100 tranche costs 3–4% and a £500 one costs 0.6–0.8%. The sleeve
+   therefore buys **£500 or more at a time**, except for a final tranche that leaves too little to buy
+   another share, and never places an order below £150 (`SleeveConfig.min_topup_base` /
+   `min_order_base`). Anything left over is swept into the next monthly switch, which sells the old
+   line in full and rebuys with the whole reserve. This is an implementation choice on top of §3, not
+   a change to the strategy, and it is judged under §6's implementation boxes like everything else.
+
+**Bug found while making the above change (would have hit the first live switch).**
+`Database.add_sleeve_reserve()` creates the reserve row from whatever delta it is handed, so if the
+sleeve's *first* action had been a switch-sell, the reserve would have been seeded at the sale
+proceeds instead of the £2,500 capital base — and the sleeve would have spent its life investing that
+amount. The reserve is now read (and therefore seeded) before anything touches it, with a regression
+test. The old code hid this: it bought one share with the mis-seeded reserve and the test passed.
+
 ## 10. Results (written as the months come in)
 
 - **First trade date and code commit:**

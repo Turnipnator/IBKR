@@ -616,6 +616,20 @@ class DecisionEngine:
                 volatility=sig_data["volatility"],
             )
 
+        # Wind-down mode: signals are still computed and stored above (the audit trail and the
+        # Telegram rankings carry on), but no opportunity is generated, so the bot opens no new
+        # position and tops none up. Nothing is sold here — opportunities only ever come from
+        # targets, and there is no sell loop over holdings, so existing positions simply ride
+        # their trailing stops out and their proceeds settle into the sleeve's reserve.
+        if not self.config.momentum_entries_enabled:
+            logger.warning(
+                "Momentum entries are OFF (wind-down, owner's decision 2026-09-17): "
+                f"{len(signals)} signals recorded, no entries and no top-ups. Existing positions "
+                "keep their protective stops and exit on them."
+            )
+            self.state.opportunities = []
+            return []
+
         # Calculate target positions (sized against deployable equity)
         logger.info("\n--- Calculating target positions ---")
         reduce_mode = "REDUCE" in risk_reason

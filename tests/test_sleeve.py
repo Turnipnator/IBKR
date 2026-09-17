@@ -310,3 +310,96 @@ def test_parity_does_not_flag_a_sleeve_symbol_as_an_orphan_stop():
     bot.engine.order_manager.get_open_orders = lambda: [stray]
     status = bot._check_order_parity()
     assert "Orphan" not in status and "orphan" not in status
+
+
+# ------------------------------------------------- funding in tranches (owner's decision 2026-09-17)
+# The sleeve is now fed by momentum stop proceeds as they settle, so it must keep buying across days
+# instead of stopping at whatever the first day's cash allowed. Card 9 §3 already required this:
+# "buy the new one as settled cash allows (T+2), retrying at each later close until funded".
+def _part_funded(tmp_path, *, available, reserve_spent=225.0, held_qty=2):
+    """Sleeve holding a small VUAA position with most of its reserve still to invest."""
+    last = pd.Timestamp("2026-08-31")
+    frames = {"VUAA": bars(last, 14, 100, 1.01), "IB01": bars(last, 14, 100, 1.002)}
+    db = Database(str(tmp_path / "sleeve.db"))
+    db.get_sleeve_reserve(2500.0)                 # seed, then spend what the first tranche cost
+    db.add_sleeve_reserve(-reserve_spent)
+    db.set_sleeve_month(datetime.now().strftime("%Y-%m"), "VUAA", "traded")
+    held = [Position(symbol="VUAA", quantity=held_qty, avg_cost=147.0, market_value=147.0 * held_qty,
+                     unrealized_pnl=0.0, realized_pnl=0.0)]
+    s, orders, _ = make_sleeve(tmp_path, positions=held, frames=frames, prices={"VUAA": 147.0},
+                               available=available, db=db)
+    return s, orders, db
+
+
+def test_sleeve_keeps_buying_a_partly_funded_position_as_cash_settles(tmp_path):
+    s, orders, db = _part_funded(tmp_path, available=800.0)
+    out = s.retry_pending()
+    assert out["status"] == "traded"
+    symbol, action, qty, _ = orders.placed[0]
+    assert (symbol, action) == ("VUAA", OrderAction.BUY)
+    assert qty == 7                                # 800 / (147 x 0.75 x 1.02) = 7 whole shares
+    assert db.get_sleeve_reserve(2500.0) < 2275.0  # the reserve fell by what was spent
+
+
+def test_a_small_tranche_waits_rather_than_paying_a_flat_commission(tmp_path):
+    """£225 of buying power against £2,275 still to invest: a $4 fee on that is ~1.8%."""
+    s, orders, _ = _part_funded(tmp_path, available=300.0)
+    assert s.retry_pending()["status"] == "noop"
+    assert orders.placed == []
+
+
+def test_the_last_tranche_is_allowed_even_though_it_is_small(tmp_path):
+    """Once what is left cannot buy another share, the small order is the finishing one."""
+    s, orders, _ = _part_funded(tmp_path, available=5000.0, reserve_spent=2200.0)
+    out = s.retry_pending()                        # £300 left, shares cost ~£112.5
+    assert out["status"] == "traded"
+    assert orders.placed[0][2] == 2
+
+
+def test_only_one_sleeve_order_a_day(tmp_path):
+    """The hook runs every loop pass, and IBKR's settled-cash figure is a lagging cache."""
+    s, orders, db = _part_funded(tmp_path, available=800.0)
+    assert s.retry_pending()["status"] == "traded"
+    assert s.retry_pending()["status"] == "noop"   # same day, second pass
+    assert s.retry_pending()["status"] == "noop"
+    assert len(orders.placed) == 1
+
+
+def test_funding_stops_once_the_reserve_is_spent(tmp_path):
+    s, orders, _ = _part_funded(tmp_path, available=5000.0, reserve_spent=2500.0)
+    assert s.retry_pending()["status"] == "noop"
+    assert orders.placed == []
+
+
+def test_a_month_with_no_decision_is_never_funded(tmp_path):
+    """No month row, or a failed signal, must not trigger a buy."""
+    s, orders, db = _part_funded(tmp_path, available=5000.0)
+    db.set_sleeve_month(datetime.now().strftime("%Y-%m"), "VUAA", "signal_failed")
+    assert s.retry_pending()["status"] == "noop"
+    assert orders.placed == []
+
+
+def test_monthly_rebalance_and_the_daily_hook_share_one_funding_path(tmp_path):
+    """The monthly buy is the same tranche logic, so it cannot place a token order either."""
+    last = pd.Timestamp("2026-08-31")
+    frames = {"VUAA": bars(last, 14, 100, 1.01), "IB01": bars(last, 14, 100, 1.002)}
+    s, orders, db = make_sleeve(tmp_path, frames=frames, prices={"VUAA": 147.0}, available=300.0)
+    out = s.rebalance(datetime(2026, 9, 1, 14, 6))
+    assert out["status"] == "pending_cash"         # £225 against a £2,500 reserve — too small
+    assert orders.placed == []
+    assert db.sleeve_month_done("2026-09") is True # the decision was still made and recorded
+
+
+def test_a_switch_sell_as_the_first_action_does_not_reseed_the_reserve(tmp_path):
+    """Regression: add_sleeve_reserve() creates the row from its delta, so the reserve must be
+    seeded at capital_base before any proceeds land — otherwise the sleeve would spend its life
+    investing the proceeds of one sale instead of its £2,500."""
+    last = pd.Timestamp("2026-08-31")
+    frames = {"VUAA": bars(last, 14, 100, 1.01), "IB01": bars(last, 14, 100, 1.002)}
+    held = [Position(symbol="IBTM", quantity=20, avg_cost=100.0, market_value=2000.0,
+                     unrealized_pnl=0.0, realized_pnl=0.0)]
+    s, orders, db = make_sleeve(tmp_path, positions=held, frames=frames,
+                                prices={"VUAA": 147.0, "IBTM": 124.0})
+    s.rebalance(datetime(2026, 9, 1, 14, 6))       # fresh database: no sleeve_account row yet
+    buys = [o for o in orders.placed if o[1] == OrderAction.BUY]
+    assert buys and buys[0][2] == 24               # (2500 + 200 proceeds) / (147 x 0.75 x 1.02)
