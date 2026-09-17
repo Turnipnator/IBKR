@@ -131,6 +131,7 @@ large edge.
 | 9 | 2026-09-17 | UCITS forward test of US absolute momentum, live sleeve (`2026-09-17_forward_test/PREREG_9_ucits_forward_test.md`) | Registered; forward test, no statistical threshold |
 | 10 | 2026-09-17 | Intraday momentum on US shares, long-only (`2026-09-17_intraday/PREREG_10_intraday_momentum.md`) | Fail (boxes 1, 4, 5) — the move is ~5 bps, the round trip costs ~16 bps |
 | 11 | 2026-09-17 | Weekly short-term reversal on 40 US shares, long-only (`2026-09-17_reversal/PREREG_11_short_term_reversal.md`) | Fail (boxes 1, 2, 3, 6) — cleared costs (+18%/yr) but no better than random names from the same list |
+| 12 | 2026-09-17 | Tuned entry/exit on 10 US shares, global vs per-stock, train 2006–2016 / test 2017–2026 (`2026-09-17_tuned/PREREG_12_tuned_entry_exit.md`) | Registered, not yet run |
 
 ### Data already seen
 
@@ -146,6 +147,7 @@ large edge.
 | 1975-01 → 2007-12 | 20 non-US country stock markets (Ken French International Countries, dollar returns) | country absolute momentum (11–13 months, US T-bill hurdle, US 10y Treasuries when out), equal-weight buy-and-hold, random-timing nulls | `2026-09-17_countries/` |
 | ~2024-09 → 2026-09 (intraday) | SPY and 10 US mega-caps, 30-minute bars | intraday momentum (first half-hour → last half-hour), long-only, thresholds ±0.05% | `2026-09-17_intraday/` |
 | ~2006-09 → 2026-09 (daily) | 40 large US shares | weekly short-term reversal (4, 5, 10-day lookback/hold), random-name and random-timing nulls | `2026-09-17_reversal/` |
+| 2006-10 → 2016-12 (training) / 2017-01 → 2026-09 (test) | 10 US mega-caps, daily | 64-combination grid: 3/5/10/20-day lookback × winner or loser × fixed hold or 1–4×ATR trailing stop | `2026-09-17_tuned/` |
 
 IBKR serves at most 20 years of daily bars, so these proxies have no history before 2006.
 For momentum or trend rules on this universe, every available period has been looked at.
