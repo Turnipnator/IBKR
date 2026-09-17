@@ -127,6 +127,36 @@ Attempt 11 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-17, code `d41a24b`, rules `3856f81`; 1,000 runs for each comparison.
+  Window 2006-10-02 → 2026-09-10, **1,003 weekly trades**, all 40 names loaded, 30–40 eligible each week.
+- **Headline:** CAGR **+18.0%**, Sharpe **0.60**, total +2,575%, worst fall **−76.3%**, 53% winners,
+  **+0.496% net per trade** against a +0.681% average gross move — so costs ran about 18.5 bps a round trip,
+  as modelled. Equal-weight buy-and-hold of the same 40 names: CAGR +19.0%, Sharpe **1.10**, worst fall −43.4%.
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random names | ≤0.455% of runs as good | **6.60%** (random median 0.32, 95th 0.61) | ✗ |
+  | 2 Beats random timing | ≤0.455% of runs as good | **15.90%** (shifted median 0.41) | ✗ |
+  | 3 Beats buy-and-hold | higher Sharpe, or half the fall with CAGR within 2 points | Sharpe 0.60 vs 1.10; fall −76.3% vs −43.4%; CAGR +18.0% vs +19.0% | ✗ |
+  | 4 Enough trades | ≥100 | 1,003 | ✓ |
+  | 5 Sub-periods | ≥3 of 4 positive | 4 of 4 (+129.0%, +114.8%, +172.2%, +99.7%) | ✓ |
+  | 6 Stress slippage | ≤0.455% at 15 bps | 1.00% (Sharpe falls to 0.36) | ✗ |
+  | 7 Neighbours | above the random-name median (0.32) | 4-day 0.44; 10-day 0.43 | ✓ |
+  | 8 Fidelity and data | clean | 0 disagreements in 1,003 weeks; entry gap 2 bps | ✓ |
+
+- **Decision:** **Fail** (boxes 1, 2, 3 and 6). Not re-tuned on this data.
+- **The cost arithmetic worked — that part of the thesis was right.** The average trade captured 68 bps gross
+  against an 18.5 bps toll, so unlike attempt 10 the strategy cleared its costs comfortably and made money in
+  absolute terms. This is the first strategy in the project to do so after real costs.
+- **What failed is the selection.** Buying the worst five-day performer is not reliably better than buying *any*
+  name from the same list: 6.6% of random-name runs matched it, and 15.9% of runs using the same picks on
+  different weeks did. Holding one name at a time also nearly doubled the drawdown against simply holding the
+  list (−76% vs −43%) for a point a year *less* return.
+- **Where the returns actually came from.** The most-picked names were TSLA (102 weeks), NVDA (91), CRM (64),
+  BAC (47) and UNH (46): the volatile winners of this era. The universe is today's large US companies, so its
+  absolute return is flattered by survivorship — which is exactly why box 1 compares against random names drawn
+  from the identical list, and why that comparison, not the +18% a year, is the verdict.
+- **Caveats:** the effect is documented as strongest in small illiquid shares, which this account cannot trade;
+  one position at a time is a concentrated way to express it; and 15 bps of slippage would be realistic if fills
+  were worse than assumed, where the edge disappears entirely (box 6).

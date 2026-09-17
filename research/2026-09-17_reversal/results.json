@@ -1,0 +1,162 @@
+{
+ "git_commit": "d41a24b",
+ "run_utc": "2026-09-17 11:01:47",
+ "window": {
+  "first": "2006-10-02",
+  "last": "2026-09-10",
+  "weeks": 1003
+ },
+ "first_bar": {
+  "AAPL": "2006-09-22",
+  "MSFT": "2006-09-22",
+  "NVDA": "2006-09-22",
+  "AMZN": "2006-09-22",
+  "GOOGL": "2006-09-22",
+  "META": "2012-05-18",
+  "TSLA": "2010-06-29",
+  "AVGO": "2016-02-02",
+  "JPM": "2006-09-22",
+  "XOM": "2006-09-22",
+  "UNH": "2006-09-22",
+  "JNJ": "2006-09-22",
+  "V": "2008-03-19",
+  "PG": "2006-09-22",
+  "MA": "2006-09-22",
+  "HD": "2006-09-22",
+  "CVX": "2006-09-22",
+  "MRK": "2006-09-22",
+  "ABBV": "2012-12-10",
+  "PEP": "2017-12-20",
+  "KO": "2006-09-22",
+  "COST": "2006-09-22",
+  "WMT": "2006-09-22",
+  "BAC": "2006-09-22",
+  "CRM": "2006-09-22",
+  "MCD": "2006-09-22",
+  "CSCO": "2006-09-22",
+  "ACN": "2006-09-22",
+  "LIN": "2018-10-31",
+  "ADBE": "2006-09-22",
+  "TMO": "2006-09-22",
+  "ABT": "2006-09-22",
+  "DHR": "2006-09-22",
+  "WFC": "2006-09-22",
+  "VZ": "2006-09-22",
+  "TXN": "2012-01-03",
+  "NEE": "2010-06-04",
+  "PM": "2008-03-17",
+  "INTC": "2006-09-22",
+  "IBM": "2006-09-22"
+ },
+ "missing": [],
+ "fidelity": {
+  "disagree": 0,
+  "weeks": 1003,
+  "mean_entry_gap_bps": 1.8493553840687011,
+  "min_eligible": 30,
+  "max_eligible": 40
+ },
+ "costs": {
+  "commission_usd": 1.0,
+  "slip_bps": 5.0,
+  "stress_bps": 15.0,
+  "notional_gbp": 2000.0
+ },
+ "threshold": 0.004545454545454546,
+ "n_null": 1000,
+ "verdict": {
+  "passed": false,
+  "boxes": {
+   "1 beats random names": {
+    "ok": false,
+    "detail": "6.60% of 1000 random-name runs have Sharpe >= 0.60 (need <= 0.455%)"
+   },
+   "2 beats random timing": {
+    "ok": false,
+    "detail": "15.90% of 1000 shifted runs have Sharpe >= 0.60"
+   },
+   "3 beats buy-and-hold": {
+    "ok": false,
+    "detail": "Sharpe 0.60 vs 1.10; worst fall -76.3% vs -43.4%; CAGR +18.0% vs +19.0%"
+   },
+   "4 enough trades": {
+    "ok": true,
+    "detail": "1003 round trips"
+   },
+   "5 sub-periods": {
+    "ok": true,
+    "detail": "4 of 4 positive: +129.0%, +114.8%, +172.2%, +99.7%"
+   },
+   "6 stress slippage": {
+    "ok": false,
+    "detail": "1.00% of random-name runs at 15 bps have Sharpe >= 0.36"
+   },
+   "7 neighbours": {
+    "ok": true,
+    "detail": "neighbour Sharpe 4d: 0.44, 10d: 0.43 vs random-name median 0.32"
+   },
+   "8 fidelity and data": {
+    "ok": true,
+    "detail": "0 disagreements in 1003 weeks; eligible names 30-40; entry gap 2 bps"
+   }
+  },
+  "base": {
+   "sharpe": 0.597779087674105,
+   "total_return": 25.7497657613289,
+   "cagr": 0.17956468540946746,
+   "maxdd": -0.7632267126970294,
+   "trades": 1003,
+   "win_rate": 0.5304087736789631,
+   "avg_net_per_trade": 0.004955877354810677,
+   "avg_gross_move": 0.006810161816395403
+  },
+  "stress": {
+   "sharpe": 0.3600518916418009,
+   "total_return": 2.712240068400218,
+   "cagr": 0.06812919509184434,
+   "maxdd": -0.7867931561771491,
+   "trades": 1003,
+   "win_rate": 0.5024925224327019,
+   "avg_net_per_trade": 0.002979129174975072,
+   "avg_gross_move": 0.006810161816395403
+  },
+  "benchmark": {
+   "sharpe": 1.1022507255617915,
+   "total_return": 30.637864149810895,
+   "cagr": 0.1895543455411841,
+   "maxdd": -0.4339712038758353
+  },
+  "benchmark_frictionless": {
+   "sharpe": 1.1053859226194371,
+   "total_return": 30.971727982901342,
+   "cagr": 0.19018198347833004,
+   "maxdd": -0.4334050335725115
+  },
+  "neighbours": {
+   "4d": 0.441178477832801,
+   "10d": 0.4289013510931642
+  },
+  "null_names": {
+   "p5": 0.024498608601148525,
+   "p50": 0.32128744403777615,
+   "p95": 0.614027899800393
+  },
+  "null_timing": {
+   "p50": 0.40910945362291595,
+   "p95": 0.729100032926006
+  },
+  "picks_top": {
+   "TSLA": 102,
+   "NVDA": 91,
+   "CRM": 64,
+   "BAC": 47,
+   "UNH": 46,
+   "INTC": 40,
+   "WFC": 36,
+   "AMZN": 35,
+   "AAPL": 34,
+   "META": 32
+  }
+ },
+ "runtime_s": 219.99204206466675
+}

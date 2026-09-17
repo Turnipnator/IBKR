@@ -1,0 +1,19 @@
+universe loaded: 40/40 names, missing []
+window 2006-10-02 -> 2026-09-10, 1003 weekly trades
+fidelity: {'disagree': 0, 'weeks': 1003, 'mean_entry_gap_bps': 1.8493553840687011, 'min_eligible': 30, 'max_eligible': 40}
+
+buy-and-hold 40 names (with costs): CAGR +19.0% Sharpe 1.10 worst fall -43.4% | frictionless: CAGR +19.0% Sharpe 1.11
+
+=== weekly reversal: FAIL ===  CAGR +18.0% Sharpe 0.60 total +2575.0% worst fall -76.3% trades 1003 win 53% net/trade +0.496% (gross move +0.681%)
+random-name Sharpe p5/50/95 0.02/0.32/0.61 | random-timing median 0.41
+  [ ] 1 beats random names: 6.60% of 1000 random-name runs have Sharpe >= 0.60 (need <= 0.455%)
+  [ ] 2 beats random timing: 15.90% of 1000 shifted runs have Sharpe >= 0.60
+  [ ] 3 beats buy-and-hold: Sharpe 0.60 vs 1.10; worst fall -76.3% vs -43.4%; CAGR +18.0% vs +19.0%
+  [x] 4 enough trades: 1003 round trips
+  [x] 5 sub-periods: 4 of 4 positive: +129.0%, +114.8%, +172.2%, +99.7%
+  [ ] 6 stress slippage: 1.00% of random-name runs at 15 bps have Sharpe >= 0.36
+  [x] 7 neighbours: neighbour Sharpe 4d: 0.44, 10d: 0.43 vs random-name median 0.32
+  [x] 8 fidelity and data: 0 disagreements in 1003 weeks; eligible names 30-40; entry gap 2 bps
+
+most-picked names: {'TSLA': 102, 'NVDA': 91, 'CRM': 64, 'BAC': 47, 'UNH': 46, 'INTC': 40, 'WFC': 36, 'AMZN': 35, 'AAPL': 34, 'META': 32}
+runtime 220s

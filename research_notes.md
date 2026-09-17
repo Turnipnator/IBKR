@@ -4,6 +4,46 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-17 — Weekly short-term reversal (attempt 11, fail — but the cost thesis held)
+
+**Question.** Attempt 10 showed the account's cost floor (~16 bps a round trip) kills anything chasing a 5 bps
+move. Does a rule aimed at 1–3% moves over five trading days clear those costs *and* beat picking a name at random?
+
+**Method.** Pre-registered in `research/2026-09-17_reversal/PREREG_11…` (commit `3856f81`; code `d41a24b`) before
+any returns existed. 40 large US shares, 20 years of dividend-adjusted daily bars. Each Friday rank by five-day
+return, buy the worst at the next open, hold five trading days. $1 a side, 5 bps slippage (15 stress), £2,000
+notional, whole shares. Two required comparisons at 0.455%: **random eligible name each week** (which cancels
+the universe's survivorship bias, since it draws from the identical list) and **the same picks shifted in time**.
+
+**Evidence.** 1,003 weekly trades, 2006-10 → 2026-09.
+
+| | CAGR | Sharpe | Worst fall | Net per trade |
+|---|---|---|---|---|
+| Weekly reversal | +18.0% | 0.60 | −76.3% | +0.496% |
+| Equal-weight buy-and-hold, same 40 names | +19.0% | 1.10 | −43.4% | — |
+| Random name each week | — | 0.32 median (0.61 at the 95th) | — | — |
+
+- **E1 the cost thesis held (HIGH).** Average gross capture 68 bps against an 18.5 bps toll. The strategy made
+  money after real costs — the first in this project to do so — which confirms the horizon fix from attempt 10.
+- **E2 the selection did not (HIGH).** 6.6% of random-name runs matched its Sharpe and 15.9% of time-shifted runs
+  did. Buying the worst performer is not reliably better than buying anything from that list.
+- **E3 concentration cost more than it earned (HIGH).** One name a week nearly doubled the drawdown (−76% vs
+  −43%) for a point a year less return than simply holding the 40 names.
+- **E4 where the money came from (MEDIUM).** Most-picked: TSLA 102 weeks, NVDA 91, CRM 64, BAC 47, UNH 46 — the
+  volatile winners of the era, in a universe chosen in 2026. Absolute returns are flattered by survivorship;
+  the random-name comparison is the honest read, and it says no edge.
+- **E5 fragility (HIGH).** At 15 bps slippage the Sharpe falls from 0.60 to 0.36 and the edge over random names
+  disappears (box 6 fails).
+
+**Conclusion.** Fail on boxes 1, 2, 3 and 6. The important progress is E1: at this horizon the cost structure is
+no longer the binding constraint, so the question becomes purely about signal quality — and a plain five-day
+loser rank in liquid mega-caps does not have one.
+
+**What this rules in for future cards.** Horizons of roughly a week with £2,000 positions are economically viable
+here. What is still missing is a selection rule with evidence behind it that survives the random-name test.
+
+---
+
 ## 2026-09-17 — Intraday momentum on US shares (attempt 10, fail) + measured trading costs
 
 **Trigger.** The owner pointed out, fairly, that the bot was built to trade actively for small profits, not to
