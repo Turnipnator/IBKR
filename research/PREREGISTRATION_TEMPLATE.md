@@ -130,6 +130,7 @@ large edge.
 | 8 | 2026-09-17 | Absolute momentum across 20 non-US country markets, 1975–2007 (`2026-09-17_countries/PREREG_8_country_absolute_momentum.md`) | **Pass** (all 8 boxes); robust to safe-asset and execution variants |
 | 9 | 2026-09-17 | UCITS forward test of US absolute momentum, live sleeve (`2026-09-17_forward_test/PREREG_9_ucits_forward_test.md`) | Registered; forward test, no statistical threshold |
 | 10 | 2026-09-17 | Intraday momentum on US shares, long-only (`2026-09-17_intraday/PREREG_10_intraday_momentum.md`) | Fail (boxes 1, 4, 5) — the move is ~5 bps, the round trip costs ~16 bps |
+| 11 | 2026-09-17 | Weekly short-term reversal on 40 US shares, long-only (`2026-09-17_reversal/PREREG_11_short_term_reversal.md`) | Registered, not yet run |
 
 ### Data already seen
 
@@ -144,6 +145,7 @@ large edge.
 | 2008-01 → 2026-08 | ISF, IWRD, IGLT, UK 3-month interbank rate | UK dual momentum (11–13 months), 60/40 IWRD/IGLT, ISF buy-and-hold, random-timing nulls | `2026-09-15_long_history_uk/` |
 | 1975-01 → 2007-12 | 20 non-US country stock markets (Ken French International Countries, dollar returns) | country absolute momentum (11–13 months, US T-bill hurdle, US 10y Treasuries when out), equal-weight buy-and-hold, random-timing nulls | `2026-09-17_countries/` |
 | ~2024-09 → 2026-09 (intraday) | SPY and 10 US mega-caps, 30-minute bars | intraday momentum (first half-hour → last half-hour), long-only, thresholds ±0.05% | `2026-09-17_intraday/` |
+| ~2006-09 → 2026-09 (daily) | 40 large US shares | weekly short-term reversal (4, 5, 10-day lookback/hold), random-name and random-timing nulls | `2026-09-17_reversal/` |
 
 IBKR serves at most 20 years of daily bars, so these proxies have no history before 2006.
 For momentum or trend rules on this universe, every available period has been looked at.
