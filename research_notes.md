@@ -4,6 +4,51 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-17 — Intraday momentum on US shares (attempt 10, fail) + measured trading costs
+
+**Trigger.** The owner pointed out, fairly, that the bot was built to trade actively for small profits, not to
+hold for years. Before testing anything, the account's real costs were measured with IBKR what-if orders
+(priced, never transmitted): **US shares $1.00 per order; UCITS ETFs $4.00 (USD line) and £3.00 (GBP line)**.
+US shares therefore cost about £1.50 a round trip against about £6 for the instruments the bot trades today —
+the difference between a short-horizon strategy being arithmetically possible and being dead on arrival.
+
+**Question.** Does the published intraday-momentum effect (first half-hour predicts last half-hour; Gao, Han, Li
+& Zhou 2018) clear those costs at this account's size?
+
+**Method.** Pre-registered in `research/2026-09-17_intraday/PREREG_10…` (commit `812e667`; code `4834b17`)
+before any returns existed. 30-minute IBKR bars, 496 complete sessions (2024-09-17 → 2026-09-16), AAPL as the
+pre-chosen primary, SPY and nine other mega-caps reported. Long only (a cash account cannot short the down-morning
+half). Enter at the 15:30 bar open, exit at its close, whole shares, $1 a side, 3 bps slippage (10 bps stress),
+1,000-run circular-shift random-timing nulls, threshold 0.5%. The benchmark that matters: holding that last
+half-hour *every* session, which isolates the signal from simply being in the market then.
+
+**Evidence.**
+
+| | Sharpe | Total return | Trades | Net per trade |
+|---|---|---|---|---|
+| Intraday momentum (AAPL) | −3.85 | −26.9% | 278 | −0.112% |
+| Always long the close | −5.81 | −47.0% | 496 | — |
+| SPY (published instrument) | −8.75 | −32.6% | 265 | — |
+| AAPL buy-and-hold, same window | — | +54.1% | 1 | — |
+
+- **E1 the arithmetic (HIGH).** Average last-half-hour move on signal days **+0.046%**; round trip costs **16 bps**
+  (10 commission + 6 slippage). 4.6 − 16 = −11.4 bps, matching the measured −0.112% per trade. **Even at zero
+  commission, slippage alone exceeds the move.**
+- **E2 the signal is not nothing (MEDIUM).** Trading only on up-mornings beat trading every session (−26.9% vs
+  −47.0%), and 8 of 10 names beat their own random timing — but 23.1% of random timings matched the strategy, so
+  the edge is not distinguishable from chance, and 0 of 4 sub-periods were positive.
+- **E3 post-publication window (MEDIUM).** The whole sample post-dates the 2018 paper, consistent with the effect
+  having been competed away in liquid US mega-caps.
+
+**Conclusion.** Fail on boxes 1, 4 and 5. More importantly, the result generalises: **any strategy whose average
+capture is below roughly 0.2% per trade cannot survive at £1,500 positions**, whatever the signal. Scalping is
+ruled out by costs at this account size, not by signal quality.
+
+**Implication for future work.** A short-horizon idea is only worth testing here if it targets moves of roughly
+**0.5% or more per trade** (multi-day holds), so the 16 bps toll is a tenth of the target rather than triple it.
+
+---
+
 ## 2026-09-17 — Country absolute momentum (attempt 8, pass) and the live forward test (attempt 9, registered)
 
 **Question.** Attempt 5 passed on US data 1928–2007. Is the effect US-only, or does the same rule show timing

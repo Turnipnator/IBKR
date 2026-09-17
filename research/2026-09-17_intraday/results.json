@@ -1,0 +1,178 @@
+{
+ "git_commit": "4834b17",
+ "run_utc": "2026-09-17 09:40:51",
+ "window": {
+  "first": "2024-09-17",
+  "last": "2026-09-16",
+  "sessions": 496
+ },
+ "costs": {
+  "commission_usd": 1.0,
+  "slip_bps": 3.0,
+  "stress_bps": 10.0,
+  "notional_gbp": 1500.0
+ },
+ "data_check": {
+  "primary": {
+   "total_days": 501,
+   "complete_days": 496,
+   "dropped": 5
+  },
+  "mean_entry_gap_bps": 0.35510307450215395,
+  "passed": true
+ },
+ "fidelity": {
+  "disagree": 0,
+  "sessions": 496,
+  "mean_entry_gap_bps": 0.35510307450215395
+ },
+ "threshold": 0.005,
+ "n_null": 1000,
+ "verdict": {
+  "passed": false,
+  "boxes": {
+   "1 beats random timing": {
+    "ok": false,
+    "detail": "23.10% of 1000 random runs have Sharpe >= -3.85 (need <= 0.5%)"
+   },
+   "2 beats always-long-the-close": {
+    "ok": true,
+    "detail": "Sharpe -3.85 vs -5.81; total return -26.9% vs -47.0%"
+   },
+   "3 enough trades": {
+    "ok": true,
+    "detail": "278 round trips"
+   },
+   "4 sub-periods": {
+    "ok": false,
+    "detail": "0 of 4 positive: -7.6%, -1.8%, -11.1%, -9.4%"
+   },
+   "5 stress slippage": {
+    "ok": false,
+    "detail": "30.20% of random runs at 10 bps have Sharpe >= -7.73"
+   },
+   "6 neighbours": {
+    "ok": true,
+    "detail": "neighbour Sharpe +0.0005: -3.70, -0.0005: -4.12 vs random median -4.27"
+   },
+   "7 fidelity and data": {
+    "ok": true,
+    "detail": "0 signal disagreements in 496 sessions; entry gap 0.4 bps; 5 incomplete sessions dropped"
+   },
+   "8 breadth": {
+    "ok": true,
+    "detail": "8 of 10 names beat their own random median (need 6)"
+   }
+  },
+  "base": {
+   "sharpe": -3.8520077645816206,
+   "total_return": -0.2691628735836157,
+   "cagr": -0.14726894464552243,
+   "maxdd": -0.2712098752166292,
+   "trades": 278,
+   "win_rate": 0.3273381294964029,
+   "avg_net_per_trade": -0.001121593203237351,
+   "avg_gross_move": 0.00046447517852161573
+  },
+  "stress": {
+   "sharpe": -7.730507322093571,
+   "total_return": -0.4927684040236523,
+   "cagr": -0.291686073717933,
+   "maxdd": -0.492780003054207,
+   "trades": 278,
+   "win_rate": 0.17625899280575538,
+   "avg_net_per_trade": -0.0024330130035970176,
+   "avg_gross_move": 0.00046447517852161573
+  },
+  "always_long": {
+   "sharpe": -5.811807819262842,
+   "total_return": -0.4701685240714204,
+   "cagr": -0.2758239094822331,
+   "maxdd": -0.4716525289984359,
+   "trades": 496,
+   "win_rate": 0.3326612903225806,
+   "avg_net_per_trade": -0.0012737703145160692,
+   "avg_gross_move": 0.0003054261349877712
+  },
+  "buy_and_hold_return": 0.541135573580533,
+  "spy": {
+   "sharpe": -8.748280180532293,
+   "total_return": -0.3256320261385096,
+   "trades": 265,
+   "win_rate": 0.12452830188679245,
+   "avg_net_per_trade": -0.0014841861622640938
+  },
+  "neighbours": {
+   "+0.0005": -3.695244053357774,
+   "-0.0005": -4.118866463987011
+  },
+  "breadth": {
+   "AAPL": {
+    "sharpe": -3.8520077645816206,
+    "null_median": -4.211344881995339,
+    "trades": 278,
+    "total_return": -0.2691628735836157
+   },
+   "MSFT": {
+    "sharpe": -5.084827309042686,
+    "null_median": -5.031231262518481,
+    "trades": 237,
+    "total_return": -0.30318858576529617
+   },
+   "NVDA": {
+    "sharpe": -2.0379580225306833,
+    "null_median": -2.8919951875756365,
+    "trades": 237,
+    "total_return": -0.2528762815115274
+   },
+   "AMZN": {
+    "sharpe": -3.5105803096508925,
+    "null_median": -3.7137676985400287,
+    "trades": 220,
+    "total_return": -0.2524930026542864
+   },
+   "META": {
+    "sharpe": -4.335189324830997,
+    "null_median": -4.793367438853247,
+    "trades": 237,
+    "total_return": -0.2895929220809875
+   },
+   "GOOGL": {
+    "sharpe": -3.583973328081897,
+    "null_median": -4.094186693055158,
+    "trades": 252,
+    "total_return": -0.27074908156528243
+   },
+   "TSLA": {
+    "sharpe": -1.3928282129393605,
+    "null_median": -1.8833096309551642,
+    "trades": 237,
+    "total_return": -0.16662628038921634
+   },
+   "AVGO": {
+    "sharpe": -2.4063699899797837,
+    "null_median": -2.4213873489408124,
+    "trades": 214,
+    "total_return": -0.25245993727180116
+   },
+   "JPM": {
+    "sharpe": -6.953974956455361,
+    "null_median": -7.009993315898194,
+    "trades": 268,
+    "total_return": -0.3469185501841825
+   },
+   "XOM": {
+    "sharpe": -6.420713532918768,
+    "null_median": -6.140912672533729,
+    "trades": 245,
+    "total_return": -0.36500384697811883
+   }
+  },
+  "null_sharpe": {
+   "p5": -5.052410865813371,
+   "p50": -4.273082555756476,
+   "p95": -3.4628424639338613
+  }
+ },
+ "runtime_s": 7.194206953048706
+}

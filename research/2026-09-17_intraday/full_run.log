@@ -1,0 +1,30 @@
+sessions: {'AAPL': 496, 'AMZN': 496, 'AVGO': 496, 'GOOGL': 496, 'JPM': 496, 'META': 496, 'MSFT': 496, 'NVDA': 496, 'SPY': 496, 'TSLA': 496, 'XOM': 496}
+data check: {"primary": {"total_days": 501, "complete_days": 496, "dropped": 5}, "mean_entry_gap_bps": 0.35510307450215395, "passed": true}
+
+window 2024-09-17 -> 2026-09-16 (496 sessions)
+always-long-the-close: Sharpe -5.81 total -47.0% trades 496 | AAPL buy-and-hold over the window +54.1%
+SPY (published instrument, not tradeable here): Sharpe -8.75 total -32.6% trades 265
+
+=== intraday momentum (AAPL): FAIL ===  Sharpe -3.85 total -26.9% worst fall -27.1% trades 278 win 33% net/trade -0.112% (gross move +0.046%) | random Sharpe p5/50/95 -5.05/-4.27/-3.46
+  [ ] 1 beats random timing: 23.10% of 1000 random runs have Sharpe >= -3.85 (need <= 0.5%)
+  [x] 2 beats always-long-the-close: Sharpe -3.85 vs -5.81; total return -26.9% vs -47.0%
+  [x] 3 enough trades: 278 round trips
+  [ ] 4 sub-periods: 0 of 4 positive: -7.6%, -1.8%, -11.1%, -9.4%
+  [ ] 5 stress slippage: 30.20% of random runs at 10 bps have Sharpe >= -7.73
+  [x] 6 neighbours: neighbour Sharpe +0.0005: -3.70, -0.0005: -4.12 vs random median -4.27
+  [x] 7 fidelity and data: 0 signal disagreements in 496 sessions; entry gap 0.4 bps; 5 incomplete sessions dropped
+  [x] 8 breadth: 8 of 10 names beat their own random median (need 6)
+
+per-name (strategy Sharpe vs its own random median):
+  AAPL   -3.85 vs -4.21 above  (278 trades, total -26.9%)
+  AMZN   -3.51 vs -3.71 above  (220 trades, total -25.2%)
+  AVGO   -2.41 vs -2.42 above  (214 trades, total -25.2%)
+  GOOGL  -3.58 vs -4.09 above  (252 trades, total -27.1%)
+  JPM    -6.95 vs -7.01 above  (268 trades, total -34.7%)
+  META   -4.34 vs -4.79 above  (237 trades, total -29.0%)
+  MSFT   -5.08 vs -5.03 below  (237 trades, total -30.3%)
+  NVDA   -2.04 vs -2.89 above  (237 trades, total -25.3%)
+  TSLA   -1.39 vs -1.88 above  (237 trades, total -16.7%)
+  XOM    -6.42 vs -6.14 below  (245 trades, total -36.5%)
+
+runtime 7s

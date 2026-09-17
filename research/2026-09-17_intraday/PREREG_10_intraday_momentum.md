@@ -119,6 +119,32 @@ Attempt 10 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-17, code `4834b17`, rules `812e667`; 1,000 random-timing runs at each
+  slippage level. Window 2024-09-17 → 2026-09-16, **496 complete sessions** (5 dropped for missing bars).
+- **Headline (AAPL):** Sharpe −3.85, total return **−26.9%**, worst fall −27.1%, 278 round trips, 33% winners,
+  **−0.112% net per trade**. Always-long-the-close: −47.0%. SPY (the published instrument, not tradeable here):
+  −32.6%. AAPL buy-and-hold over the same window: +54.1%.
+- **Why it loses, in one line:** the average last-half-hour move on signal days was **+0.046%** (4.6 bps) while a
+  round trip costs **16 bps** — 10 bps commission ($2 on a $2,000 position) plus 6 bps slippage. Gross 4.6 minus
+  16 is −11.4 bps, which is the measured −0.112% per trade. **Even with zero commission the 6 bps of slippage
+  alone exceeds the move.**
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random timing | ≤ 0.5% of runs at least as good | 23.1% | ✗ |
+  | 2 Beats always-long-the-close | higher Sharpe and total return | −3.85 vs −5.81; −26.9% vs −47.0% | ✓ |
+  | 3 Enough trades | ≥ 100 | 278 | ✓ |
+  | 4 Sub-periods | ≥ 3 of 4 positive | 0 of 4 (−7.6%, −1.8%, −11.1%, −9.4%) | ✗ |
+  | 5 Stress slippage | ≤ 0.5% at 10 bps | 30.2% | ✗ |
+  | 6 Neighbours | above the random median (−4.27) | +0.05%: −3.70; −0.05%: −4.12 | ✓ |
+  | 7 Fidelity and data | agreement, complete sessions, real entry prices | 0 disagreements in 496 sessions; entry gap 0.4 bps | ✓ |
+  | 8 Breadth | ≥ 6 of 10 names above their own random median | 8 of 10 | ✓ |
+
+- **Decision:** **Fail** (boxes 1, 4 and 5). Not re-tuned on this data.
+- **What the passing boxes mean, and don't.** Boxes 2 and 8 say the morning move does carry a little information:
+  trading only on up-mornings lost less than trading every day, and 8 of 10 names beat their own random timing.
+  But box 1 says that edge is not distinguishable from chance (23% of random timings did as well), and it is far
+  too small to pay for the trading. The signal isn't worthless; it's worth about 5 bps, against a 16 bps toll.
+- **Caveats:** two years is a short sample; the whole window post-dates the 2018 paper, which is consistent with
+  the effect being competed away; and a cash account can only trade the long half of the published rule.
