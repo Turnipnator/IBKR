@@ -213,6 +213,12 @@ def main():
     sig_months = pd.period_range(FIRST_SIGNAL, LAST_SIGNAL, freq="M")
     countries = sorted(creturns)
 
+    cret = np.full((len(countries), len(months)), np.nan)
+    for i, name in enumerate(countries):
+        cret[i] = creturns[name].reindex(months).to_numpy()
+    bret = bonds.reindex(months).to_numpy()
+    rf_m = rf.reindex(months).to_numpy()
+
     sig = {}
     fid_disagree = 0
     for lb in (12, 11, 13):
@@ -224,21 +230,16 @@ def main():
                 loop = signals_loop(creturns[name], rf, sig_months, lb)
                 a, b = s.to_numpy(), loop.to_numpy()
                 fid_disagree += int(np.sum((np.isnan(a) != np.isnan(b)) | ((~np.isnan(a)) & (a != b))))
-        sig[lb] = mat
+        # the card: a country "leaves when its data ends" — it can only trade in a month it has a
+        # return for (Malaysia's signal is valid at its last month-end 2001-10, but 2001-11 has no data)
+        sig[lb] = np.where(np.isnan(cret), np.nan, mat)
 
-    cret = np.full((len(countries), len(months)), np.nan)
-    for i, name in enumerate(countries):
-        cret[i] = creturns[name].reindex(months).to_numpy()
-    bret = bonds.reindex(months).to_numpy()
-    rf_m = rf.reindex(months).to_numpy()
-
-    # data checks (box 7)
+    # data checks (box 7): no gap INSIDE a country's traded window (ending is leaving, not a hole)
     holes = {}
     for i, name in enumerate(countries):
-        used = ~np.isnan(sig[12][i])
-        gaps = int(np.sum(used & np.isnan(cret[i])))
-        if gaps:
-            holes[name] = gaps
+        used = np.where(~np.isnan(sig[12][i]))[0]
+        if len(used) and (used[-1] - used[0] + 1) != len(used):
+            holes[name] = int(used[-1] - used[0] + 1 - len(used))
     us_mkt = monthly["mkt"].reindex(months).to_numpy()
     pooled = np.nanmean(cret, axis=0)
     ok = ~np.isnan(pooled) & ~np.isnan(us_mkt)
