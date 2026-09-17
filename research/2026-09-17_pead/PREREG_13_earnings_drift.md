@@ -136,7 +136,43 @@ Attempt 13 added to `research/PREREGISTRATION_TEMPLATE.md` on registration.
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-17, rules `9ce0b3a`, code `49c2654`; 1,000 runs for each comparison.
+  Window 2006-10-02 → 2026-09-10. **3,738 item-2.02 filings → 3,172 events in window → 967 qualifying
+  (AR ≥ +2.0%) → 176 traded** (the rest overlapped a position already held).
+- **Headline:** CAGR **+14.6%**, Sharpe **0.65**, total +1,410%, worst fall −40.5%, 62% winners,
+  **+1.93% net per trade**. Equal-weight buy-and-hold of the same 40: CAGR +18.5%, Sharpe 0.74, fall −43.8%.
 - **Figure for each §6 box:**
-- **The drift curve (§5):**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random names | ≤0.385% of runs as good | **43.70%** (random median 0.62, 5th/95th 0.34/0.87) | ✗ |
+  | 2 Beats random timing | ≤0.385% | 38.10% (shifted median 0.59) | ✗ |
+  | 3 Beats buy-and-hold | higher Sharpe, or half the fall with CAGR within 2 points | Sharpe 0.65 vs 0.74; fall −40.5% vs −43.8%; CAGR +14.6% vs +18.5% | ✗ |
+  | 4 Enough trades | ≥100 | 176 | ✓ |
+  | 5 Sub-periods | ≥3 of 4 positive | 4 of 4 (+81.6%, +240.3%, +47.5%, +65.5%) | ✓ |
+  | 6 Stress slippage | ≤0.385% at 15 bps | 42.80% (Sharpe falls to 0.58) | ✗ |
+  | 7 Neighbours | all four above the random-name median (0.62) | hold 10d **0.83**, hold 40d **0.64**, AR≥1.5% **0.52**, AR≥3.0% **0.79** — one below | ✗ |
+  | 8 Fidelity and data | agree, and 3–6 filings per name-year | 0 implementation disagreements; **37 complete name-years outside 3–6** (CVX and ABBV file 7–8 item-2.02 releases a year; on a per-name median reading only TSLA fails) | ✗ |
+
+- **The drift curve (§5) — the effect is real and it is small.** Average cumulative abnormal return after a
+  +2% earnings jump, across 950 events: **+0.25% by day 5, +0.58% by day 20, +0.97% by day 60.** The mirror case
+  (a −2% jump, which this account cannot trade because it cannot short) drifts **−0.61% by day 20** before
+  recovering to −0.06% by day 60. Contrary to the decay literature, in this sample the drift is **larger in the
+  recent era**: +1.21% at day 60 for 2017–2026 against +0.69% for 2006–2016.
+- **Why a real effect still failed every comparison — the decisive arithmetic.** At day 20 the abnormal return
+  averages **+0.598% with a standard deviation of 6.81%** across 964 events (t = 2.73, so the effect itself is
+  statistically solid). The edge is one twelfth of the noise on a single trade. Seeing it at t = 2 takes roughly
+  **519 events**; holding one position at a time produced 176 trades in twenty years. Each trade's outcome is
+  therefore dominated by the ±6.8% of ordinary single-name movement, which is precisely why buying a random name
+  on the same days matched it 44% of the time.
+- **What the strategy actually earned.** +1.93% per trade against a +0.60% abnormal edge: **the bulk of the
+  return was simply twenty days of market exposure**, not the earnings signal. That is also why it lost to
+  holding all forty names — the same exposure, continuously, with no toll.
+- **Decision:** **Fail** (boxes 1, 2, 3, 6, 7, 8). Not re-tuned on this data.
+- **Costs were not the binding constraint again** (+1.93% a trade against an 18.5 bps toll), but for the first
+  time cost *is* part of the structural verdict: harvesting a 0.6% edge needs hundreds of simultaneous small
+  positions, and at £500 a position a $2 round trip is 0.3% — half the edge — before the account runs out of
+  slots and settled cash.
+- **Disclosure:** a 25-seed smoke printed a verdict before one fix to the §6 box 8 coverage check landed
+  (`49c2654`: the check was counting the partial years 2006 and 2026 as if they were full ones, flagging every
+  name). No rule, window, threshold or pass mark on returns was changed in response.

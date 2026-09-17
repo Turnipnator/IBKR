@@ -4,6 +4,56 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-17 — Post-earnings announcement drift (attempt 13, fail — and the clearest structural answer yet)
+
+**Question.** Every signal tested so far is built from past prices, and all of them failed the same way. Does an
+**event-driven** signal do better: buy shares that jump on the day they report results, hold a month?
+
+**Method.** Pre-registered in `research/2026-09-17_pead/PREREG_13…` (rules `9ce0b3a`, code `49c2654`) before any
+returns existed. Announcement dates come from **SEC EDGAR 8-K item 2.02 filings** with their acceptance
+timestamps — free, no API key, no vendor. 3,738 filings across the 40 attempt-11 names, full coverage; day 0 is
+the filing's own session if accepted before 19:30 UTC, else the next. Surprise = day-0 return minus the
+equal-weight universe return. Buy at the next open when AR ≥ +2.0%, hold 20 trading days, one position at a
+time, $1 a side, 5 bps slippage (15 stress), £2,000 notional. 1,000 random-name and 1,000 random-timing runs,
+threshold 0.385%.
+
+**Data-quality work that mattered.** The XOM ticker now resolves to a 2026 re-registration holding a single
+filing while twenty years of Exxon Mobil sit under the old CIK; Accenture's pre-2009 years live under two
+Bermuda entities; Alphabet's pre-2015 years under Google Inc; Broadcom's under two predecessors. All found by
+checking rather than guessing — without them the early years would have been silently empty.
+
+**Result — fail (boxes 1, 2, 3, 6, 7, 8).** CAGR **+14.6%**, Sharpe **0.65**, 176 trades, 62% winners,
+**+1.93% net per trade**, worst fall −40.5%. Buy-and-hold the same 40: CAGR +18.5%, Sharpe 0.74. **43.7% of
+random-name runs matched it**, 38.1% of time-shifted runs did.
+
+**The drift is real — that is the useful part.** Average cumulative abnormal return after a +2% earnings jump
+(950 events): **+0.25% day 5, +0.58% day 20, +0.97% day 60**; the −2% mirror drifts −0.61% by day 20. In this
+sample it is *stronger* in 2017–2026 (+1.21% at day 60) than 2006–2016 (+0.69%), against the decay literature.
+
+**Why a real effect is still not a strategy here — the decisive arithmetic.** At day 20 the abnormal return is
+**+0.598% with a standard deviation of 6.81%** (n = 964, **t = 2.73**). The edge is **one twelfth of the noise on
+a single trade**, so it takes ~**519 events** to see it at t = 2. One position at a time produced 176 trades in
+twenty years, each dominated by ±6.8% of ordinary single-name movement. The strategy's +1.93% per trade was
+mostly twenty days of market exposure, not the signal — which is why holding all forty names beat it.
+
+**The structural lesson, which now applies to every future card.** A £5k account that can hold a handful of
+positions cannot harvest an edge of this size *even when the edge is genuinely there*. Harvesting 0.6% per event
+needs hundreds of small simultaneous positions; at £500 a position a $2 round trip is 0.3%, half the edge, and
+the account runs out of slots and settled cash long before it runs out of events. **The binding constraint is no
+longer signal quality or cost per trade — it is the number of independent bets the account can hold at once.**
+Any future candidate must clear a higher bar: an effect large enough to survive being held a few names at a
+time, i.e. percent-level per trade, not tenths.
+
+**Takeaways.**
+- Event-driven signals are not obviously better than price-driven ones at this account size; the failure mode is
+  identical (indistinguishable from random names).
+- EDGAR is a reliable free source of announcement timestamps and is now scripted (`fetch_earnings.py`).
+- Thirteen attempts, one idea that has passed twice: slow absolute momentum with a safe asset (attempts 5 and 8).
+- **Disclosure:** a 25-seed smoke printed a verdict before a fix to the box 8 coverage check (`49c2654`, partial
+  years 2006/2026 were being counted as full). No rule or pass mark on returns changed.
+
+---
+
 ## 2026-09-17 — Tuned entry/exit per stock, ten US mega-caps (attempt 12, fail)
 
 **Question.** The account owner's own proposal: hold ten well-known names and work out the entry and exit rule

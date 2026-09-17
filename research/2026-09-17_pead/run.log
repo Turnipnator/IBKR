@@ -1,0 +1,20 @@
+window 2006-10-02 -> 2026-09-10 | 3738 filings -> 3172 events in window, 967 qualifying (AR >= 2.0%)
+
+drift after a +2% earnings jump (950 events): day+5 +0.25%, day+20 +0.58%, day+60 +0.97%  |  2006-16 vs 2017-26 at day+60: +0.69% vs +1.21%
+mirror (-2% jumps, not tradeable here, 866 events): day+20 -0.61%, day+60 -0.06%
+buy-and-hold the 40 (with costs): CAGR +18.5% Sharpe 0.74 worst fall -43.8%
+
+=== earnings drift: FAIL ===  CAGR +14.6% Sharpe 0.65 total +1409.7% worst fall -40.5% trades 176 win 62% per trade +1.927%
+    random names p5/50/95 0.34/0.62/0.87 | random timing median 0.59
+  [ ] 1 beats random names: 43.70% of 1000 random-name runs have Sharpe >= 0.65 (need <= 0.385%); random median 0.62
+  [ ] 2 beats random timing: 38.10% of shifted runs have Sharpe >= 0.65
+  [ ] 3 beats buy-and-hold: Sharpe 0.65 vs 0.74; worst fall -40.5% vs -43.8%; CAGR +14.6% vs +18.5%
+  [x] 4 enough trades: 176 round trips
+  [x] 5 sub-periods: 4 of 4 positive: +81.6%, +240.3%, +47.5%, +65.5%
+  [ ] 6 stress slippage: 42.80% of random-name runs at 15 bps have Sharpe >= 0.58
+  [ ] 7 neighbours: AR>=2.0%, hold 10d 0.83; AR>=2.0%, hold 40d 0.64; AR>=1.5%, hold 20d 0.52; AR>=3.0%, hold 20d 0.79 vs random median 0.62
+  [ ] 8 fidelity and data: 0 implementation disagreement(s); 37 name-year(s) outside 3-6 filings (median reading: 1 name(s) fail)
+  name-years outside 3-6 filings (37): ABBV 2022:7, ABBV 2023:8, ABBV 2024:8, ABBV 2025:8, ACN 2010:8, ACN 2011:8, ACN 2012:8, CVX 2007:8, CVX 2008:8, CVX 2009:8, CVX 2010:8, CVX 2011:8, CVX 2012:8, CVX 2013:8, CVX 2014:7 ...
+  most traded: {'ADBE': 20, 'ACN': 15, 'CRM': 14, 'NVDA': 13, 'UNH': 13, 'TSLA': 10, 'HD': 8, 'WMT': 7, 'CSCO': 7, 'IBM': 7}
+
+runtime 421s
