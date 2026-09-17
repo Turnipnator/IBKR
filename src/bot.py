@@ -23,7 +23,7 @@ import pandas as pd
 from .connection import ConnectionManager
 from .engine import DecisionEngine
 from .database import Database
-from .config import ibkr_config, telegram_config, trading_config, currency_symbol
+from .config import ibkr_config, telegram_config, trading_config, currency_symbol, sleeve_config
 from .telegram_bot import TelegramNotifier, get_notifier, check_telegram_commands
 from .gateway_monitor import GatewayMonitor
 from .data_health_checker import DataHealthChecker
@@ -69,6 +69,7 @@ class TradingBot:
         self.notifier = get_notifier() if enable_telegram else None
 
         self._last_summary_date: Optional[str] = None
+        self.sleeve = None            # forward-test sleeve (attempt 9), built in run_scheduled
         self._last_rebalance_date: Optional[str] = None
         self._last_rebalance_at: Optional[datetime] = None
         self._last_risk_check: Optional[datetime] = None
@@ -306,10 +307,12 @@ class TradingBot:
                 if sp:
                     stops[tr.contract.symbol] = sp
             out = []
+            live_sleeve_syms = self.engine._sleeve_symbols()
             for p in self.engine.position_manager.get_positions():
                 if p.quantity == 0:
                     continue
                 out.append({
+                    "sleeve": p.symbol in live_sleeve_syms,
                     "symbol": p.symbol,
                     "quantity": abs(p.quantity),
                     "action": "BUY" if p.quantity > 0 else "SELL",
@@ -707,7 +710,12 @@ class TradingBot:
         if not self.connection.ensure_connected():
             return 0
 
-        positions = self.engine.position_manager.get_positions()
+        # Sleeve positions carry no stops by design (attempt 9 §3).
+        sleeve_syms = self.engine._sleeve_symbols()
+        positions = [
+            p for p in self.engine.position_manager.get_positions()
+            if p.symbol not in sleeve_syms
+        ]
         if not positions:
             return 0
 
@@ -842,7 +850,14 @@ class TradingBot:
             cancelled = self.engine.order_manager.cancel_all_orders()
             if cancelled:
                 logger.warning(f"Halt: cancelled {cancelled} working orders")
-            close_results = self.engine.position_manager.close_all_positions()
+            # The sleeve is a separate strategy with its own stop rule (attempt 9
+            # §7): a momentum halt must not liquidate it.
+            halt_sleeve_syms = self.engine._sleeve_symbols()
+            close_results = [
+                self.engine.position_manager.close_position(p.symbol, "Drawdown halt")
+                for p in self.engine.position_manager.get_positions()
+                if p.quantity != 0 and p.symbol not in halt_sleeve_syms
+            ]
             ok = sum(1 for r in close_results if r.success)
             logger.warning(
                 f"Halt: closed {ok}/{len(close_results)} live positions"
@@ -886,16 +901,19 @@ class TradingBot:
         # Orphan check: working TRAIL/STP for symbols with no position
         try:
             open_orders = self.engine.order_manager.get_open_orders()
+            sleeve_syms = self.engine._sleeve_symbols()
             positions = {
                 p.symbol: p.quantity
                 for p in self.engine.position_manager.get_positions()
-                if p.quantity != 0
+                if p.quantity != 0 and p.symbol not in sleeve_syms
             }
             orphans = []
             for t in open_orders:
                 if t.order.orderType not in ("TRAIL", "STP"):
                     continue
                 sym = t.contract.symbol
+                if sym in sleeve_syms:
+                    continue
                 if positions.get(sym, 0) == 0:
                     orphans.append(f"{sym}#{t.order.orderId}")
         except Exception as e:
@@ -1442,6 +1460,26 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Fill-handler registration failed: {e}")
 
+        # Forward-test sleeve (attempt 9): ring-fenced, and off unless
+        # SLEEVE_ENABLED=true. Built here because the engine exists by now.
+        if sleeve_config.enabled and not self.dry_run and self.engine is not None:
+            try:
+                from .sleeve import SleeveStrategy
+                self.sleeve = SleeveStrategy(
+                    self.connection, self.engine.order_manager, self.engine.position_manager,
+                    self.engine.fetcher, self.db, self.notifier, sleeve_config,
+                )
+                self.engine.sleeve = self.sleeve
+                logger.info(
+                    f"Sleeve enabled: {sleeve_config.capital_base:,.0f} base "
+                    f"({sleeve_config.equity_symbol}/{sleeve_config.bond_symbol}, "
+                    f"hurdle {sleeve_config.hurdle_symbol}), monthly at "
+                    f"{sleeve_config.hour}:{sleeve_config.minute:02d}"
+                )
+            except Exception as e:
+                logger.error(f"Sleeve setup failed, continuing without it: {e}")
+                self.sleeve = None
+
         try:
             while self.running:
                 now_local = datetime.now(self.MARKET_TZ)
@@ -1489,6 +1527,18 @@ class TradingBot:
                 # Intraday risk check
                 elif self._is_risk_check_time():
                     self.run_risk_check()
+
+                # Forward-test sleeve: one decision a calendar month, plus a
+                # daily retry when settled cash could not fund the buy (T+2).
+                if self.sleeve is not None:
+                    try:
+                        if self.sleeve.is_due(now_local):
+                            logger.info("=== SLEEVE MONTHLY REBALANCE ===")
+                            self.sleeve.rebalance(now_local)
+                        else:
+                            self.sleeve.retry_pending()
+                    except Exception as e:
+                        logger.error(f"Sleeve run failed: {e}", exc_info=True)
 
                 # Build price fetcher for Telegram commands
                 def get_prices(symbols):

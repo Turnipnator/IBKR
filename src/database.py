@@ -138,6 +138,32 @@ class Database:
                     reason TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                -- Forward-test sleeve (attempt 9): one decision a month, its own cash claim.
+                CREATE TABLE IF NOT EXISTS sleeve_months (
+                    month TEXT PRIMARY KEY,
+                    target TEXT,
+                    status TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS sleeve_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    month TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    order_id INTEGER,
+                    fill_price REAL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS sleeve_account (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    reserve_base REAL NOT NULL,
+                    capital_base REAL NOT NULL,
+                    started_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             conn.commit()
 
@@ -795,6 +821,93 @@ class Database:
                 (now,),
             )
             return {row[0]: row[1] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    # ==================== Forward-test sleeve (attempt 9) ====================
+
+    def get_sleeve_reserve(self, capital_base: float) -> float:
+        """The sleeve's claim on account cash. Seeds itself with capital_base on first use."""
+        conn = self._get_connection()
+        try:
+            row = conn.execute("SELECT reserve_base FROM sleeve_account WHERE id = 1").fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO sleeve_account (id, reserve_base, capital_base) VALUES (1, ?, ?)",
+                    (float(capital_base), float(capital_base)),
+                )
+                conn.commit()
+                return float(capital_base)
+            return float(row[0])
+        finally:
+            conn.close()
+
+    def add_sleeve_reserve(self, delta_base: float) -> float:
+        """Move cash into (+) or out of (-) the sleeve's reserve. Never goes negative."""
+        conn = self._get_connection()
+        try:
+            row = conn.execute("SELECT reserve_base FROM sleeve_account WHERE id = 1").fetchone()
+            current = float(row[0]) if row else 0.0
+            new = max(0.0, current + float(delta_base))
+            if row is None:
+                conn.execute(
+                    "INSERT INTO sleeve_account (id, reserve_base, capital_base) VALUES (1, ?, ?)",
+                    (new, new),
+                )
+            else:
+                conn.execute("UPDATE sleeve_account SET reserve_base = ? WHERE id = 1", (new,))
+            conn.commit()
+            return new
+        finally:
+            conn.close()
+
+    def set_sleeve_month(self, month: str, target: str, status: str):
+        """Record this month's decision so a restart cannot repeat it."""
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO sleeve_months (month, target, status, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(month) DO UPDATE SET
+                    target = excluded.target,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (month, target, status, datetime.now().isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_sleeve_month(self, month: str) -> Optional[dict]:
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT month, target, status, updated_at FROM sleeve_months WHERE month = ?",
+                (month,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def sleeve_month_done(self, month: str) -> bool:
+        """True once this month's decision has been made (a failed signal does not count)."""
+        state = self.get_sleeve_month(month)
+        return bool(state and state.get("status") not in (None, "", "signal_failed"))
+
+    def record_sleeve_order(self, month: str, action: str, symbol: str, quantity: int,
+                            order_id=None, fill_price=None):
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO sleeve_orders (month, action, symbol, quantity, order_id, fill_price)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (month, action, symbol, int(quantity), order_id, fill_price),
+            )
+            conn.commit()
         finally:
             conn.close()
 

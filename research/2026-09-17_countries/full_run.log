@@ -1,0 +1,43 @@
+countries: 21 ['Austria', 'Austrlia', 'Belgium', 'Canada', 'Denmark', 'Finland', 'France', 'Germany', 'HongKong', 'Ireland', 'Italy', 'Japan', 'Malaysia', 'Nethrlnd', 'NewZland', 'Norway', 'Singapor', 'Spain', 'Sweden', 'Swtzrlnd', 'UK']
+data check: {"country_gaps": {}, "pooled_vs_us_corr": 0.6770527060863696, "bond_months": 384, "passed": true}
+fidelity: {'disagree': 0, 'country_months': 6922}
+first eligible month: {'Austria': '1988-01', 'Austrlia': '1976-01', 'Belgium': '1976-01', 'Canada': '1978-01', 'Denmark': '1990-01', 'Finland': '1989-01', 'France': '1976-01', 'Germany': '1976-01', 'HongKong': '1976-01', 'Ireland': '1992-01', 'Italy': '1976-01', 'Japan': '1976-01', 'Malaysia': '1995-01', 'Nethrlnd': '1976-01', 'NewZland': '1989-01', 'Norway': '1976-01', 'Singapor': '1976-01', 'Spain': '1976-01', 'Sweden': '1976-01', 'Swtzrlnd': '1976-01', 'UK': '1976-01'}
+one run 0.01s; 2004 tasks on 3 processes
+simulations done 13s
+
+buy-and-hold benchmark: CAGR +15.3% Sharpe 0.63 worst fall -36.8%
+
+=== country absolute momentum: PASS ===  CAGR +17.9% Sharpe 0.96 worst fall -24.2% vol 11.9% | random Sharpe p5/50/95 0.52/0.60/0.70 | random CAGR median +12.5%
+  [x] 1 beats random timing: 0.00% of 1000 random runs have Sharpe >= 0.96 (need <= 0.625%)
+  [x] 2 beats buy-and-hold: Sharpe 0.96 vs 0.63; worst fall -24.2% vs -36.8%; CAGR +17.9% vs +15.3%
+  [x] 3 enough decisions: 384 months, 32.9 switches per country on average
+  [x] 4 sub-periods: 4 of 4 positive: +274.7%, +369.2%, +245.2%, +219.7%
+  [x] 5 stress slippage: 0.00% of random runs at 15 bps have Sharpe >= 0.94
+  [x] 6 neighbours: neighbour Sharpe 11: 0.98, 13: 0.91 vs random median 0.60
+  [x] 7 fidelity and data: 0 signal disagreements in 6922 country-months; pooled vs US corr 0.68
+  [x] 8 breadth: 21 of 21 countries above their own random-timing median (need 14)
+
+per-country Sharpe (strategy vs its own random median):
+  Austria    +0.67 vs +0.57 above
+  Austrlia   +0.78 vs +0.57 above
+  Belgium    +0.83 vs +0.62 above
+  Canada     +0.88 vs +0.66 above
+  Denmark    +0.92 vs +0.58 above
+  Finland    +0.69 vs +0.47 above
+  France     +0.86 vs +0.58 above
+  Germany    +0.88 vs +0.61 above
+  HongKong   +0.67 vs +0.45 above
+  Ireland    +0.75 vs +0.54 above
+  Italy      +0.76 vs +0.53 above
+  Japan      +0.76 vs +0.53 above
+  Malaysia   +0.83 vs +0.24 above
+  Nethrlnd   +1.04 vs +0.66 above
+  NewZland   +0.80 vs +0.48 above
+  Norway     +0.72 vs +0.50 above
+  Singapor   +0.77 vs +0.50 above
+  Spain      +0.81 vs +0.56 above
+  Sweden     +0.78 vs +0.52 above
+  Swtzrlnd   +0.90 vs +0.66 above
+  UK         +0.90 vs +0.60 above
+
+runtime 13s

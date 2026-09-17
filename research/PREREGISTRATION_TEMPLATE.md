@@ -127,7 +127,7 @@ large edge.
 | 5 | 2026-09-15 | US absolute momentum, 1928–2007 (`2026-09-15_long_history_uk/PREREG_5_us_absolute_momentum.md`) | **Pass** (all 7 boxes); next step is a UCITS card on unused data |
 | 6 | 2026-09-15 | US 10-month trend timing, 1928–2007 (`2026-09-15_long_history_uk/PREREG_6_us_trend_timing.md`) | Fail (boxes 1, 2, 5) |
 | 7 | 2026-09-15 | UK dual momentum, 2008–2026 (`2026-09-15_long_history_uk/PREREG_7_uk_dual_momentum.md`) | Fail (boxes 1, 2, 5) |
-| 8 | 2026-09-17 | Absolute momentum across 20 non-US country markets, 1975–2007 (`2026-09-17_countries/PREREG_8_country_absolute_momentum.md`) | Registered, not yet run |
+| 8 | 2026-09-17 | Absolute momentum across 20 non-US country markets, 1975–2007 (`2026-09-17_countries/PREREG_8_country_absolute_momentum.md`) | **Pass** (all 8 boxes); robust to safe-asset and execution variants |
 | 9 | 2026-09-17 | UCITS forward test of US absolute momentum, live sleeve (`2026-09-17_forward_test/PREREG_9_ucits_forward_test.md`) | Registered; forward test, no statistical threshold |
 
 ### Data already seen

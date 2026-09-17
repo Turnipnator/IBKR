@@ -1,0 +1,278 @@
+{
+ "git_commit": "3e02c98",
+ "run_utc": "2026-09-17 08:40:17",
+ "withdrawn": false,
+ "countries": [
+  "Austria",
+  "Austrlia",
+  "Belgium",
+  "Canada",
+  "Denmark",
+  "Finland",
+  "France",
+  "Germany",
+  "HongKong",
+  "Ireland",
+  "Italy",
+  "Japan",
+  "Malaysia",
+  "Nethrlnd",
+  "NewZland",
+  "Norway",
+  "Singapor",
+  "Spain",
+  "Sweden",
+  "Swtzrlnd",
+  "UK"
+ ],
+ "first_eligible": {
+  "Austria": "1988-01",
+  "Austrlia": "1976-01",
+  "Belgium": "1976-01",
+  "Canada": "1978-01",
+  "Denmark": "1990-01",
+  "Finland": "1989-01",
+  "France": "1976-01",
+  "Germany": "1976-01",
+  "HongKong": "1976-01",
+  "Ireland": "1992-01",
+  "Italy": "1976-01",
+  "Japan": "1976-01",
+  "Malaysia": "1995-01",
+  "Nethrlnd": "1976-01",
+  "NewZland": "1989-01",
+  "Norway": "1976-01",
+  "Singapor": "1976-01",
+  "Spain": "1976-01",
+  "Sweden": "1976-01",
+  "Swtzrlnd": "1976-01",
+  "UK": "1976-01"
+ },
+ "data_check": {
+  "country_gaps": {},
+  "pooled_vs_us_corr": 0.6770527060863696,
+  "bond_months": 384,
+  "passed": true
+ },
+ "fidelity": {
+  "disagree": 0,
+  "country_months": 6922
+ },
+ "threshold": 0.00625,
+ "n_null": 1000,
+ "window": {
+  "first_signal": "1975-12",
+  "last_signal": "2007-11",
+  "first_month": "1976-01",
+  "last_month": "2007-12",
+  "months": 384
+ },
+ "benchmark": {
+  "blocks": [
+   1.606644444922284,
+   3.6121778173377272,
+   2.3567810244566303,
+   1.361116446680792
+  ],
+  "sharpe": 0.631985645733472,
+  "cagr": 0.15304068867809617,
+  "maxdd": -0.36757010630584463,
+  "vol": 0.15272318917173452,
+  "end": 9528.58157834738
+ },
+ "verdict": {
+  "passed": true,
+  "boxes": {
+   "1 beats random timing": {
+    "ok": true,
+    "detail": "0.00% of 1000 random runs have Sharpe >= 0.96 (need <= 0.625%)"
+   },
+   "2 beats buy-and-hold": {
+    "ok": true,
+    "detail": "Sharpe 0.96 vs 0.63; worst fall -24.2% vs -36.8%; CAGR +17.9% vs +15.3%"
+   },
+   "3 enough decisions": {
+    "ok": true,
+    "detail": "384 months, 32.9 switches per country on average"
+   },
+   "4 sub-periods": {
+    "ok": true,
+    "detail": "4 of 4 positive: +274.7%, +369.2%, +245.2%, +219.7%"
+   },
+   "5 stress slippage": {
+    "ok": true,
+    "detail": "0.00% of random runs at 15 bps have Sharpe >= 0.94"
+   },
+   "6 neighbours": {
+    "ok": true,
+    "detail": "neighbour Sharpe 11: 0.98, 13: 0.91 vs random median 0.60"
+   },
+   "7 fidelity and data": {
+    "ok": true,
+    "detail": "0 signal disagreements in 6922 country-months; pooled vs US corr 0.68"
+   },
+   "8 breadth": {
+    "ok": true,
+    "detail": "21 of 21 countries above their own random-timing median (need 14)"
+   }
+  },
+  "base": {
+   "kind": "base",
+   "slip": 5.0,
+   "seed": null,
+   "lookback": 12,
+   "blocks": [
+    2.7469048779531637,
+    3.6916168246664345,
+    2.4522662210914334,
+    2.1969629417089265
+   ],
+   "sharpe": 0.9589379596930043,
+   "cagr": 0.17894870263509954,
+   "maxdd": -0.24198624924374568,
+   "vol": 0.11923369439523909,
+   "end": 19401.57933143179
+  },
+  "stress": {
+   "kind": "base",
+   "slip": 15.0,
+   "seed": null,
+   "lookback": 12,
+   "blocks": [
+    2.665972437859119,
+    3.5773844276121762,
+    2.3836298183084175,
+    2.157018967503074
+   ],
+   "sharpe": 0.937932640302101,
+   "cagr": 0.17603658367965314,
+   "maxdd": -0.24201665690918528,
+   "vol": 0.11923884758108144,
+   "end": 17925.307641508283
+  },
+  "null_sharpe": {
+   "p5": 0.51605356435318,
+   "p50": 0.6021994091407913,
+   "p95": 0.6980339747870342
+  },
+  "null_cagr": {
+   "p5": 0.1145477408920586,
+   "p50": 0.12504078304976463,
+   "p95": 0.13596125457670558
+  },
+  "neighbours": {
+   "11": 0.9846797602758539,
+   "13": 0.9099111719285436
+  },
+  "breadth": {
+   "Austria": {
+    "strategy": 0.6700595711862521,
+    "null_median": 0.5663102464001711
+   },
+   "Austrlia": {
+    "strategy": 0.7818749709106894,
+    "null_median": 0.5741138588534662
+   },
+   "Belgium": {
+    "strategy": 0.8321140971158505,
+    "null_median": 0.6179089224920886
+   },
+   "Canada": {
+    "strategy": 0.8752538416323594,
+    "null_median": 0.6604760517193105
+   },
+   "Denmark": {
+    "strategy": 0.9210017082422033,
+    "null_median": 0.5802154396364159
+   },
+   "Finland": {
+    "strategy": 0.6867707508533897,
+    "null_median": 0.46803683825234654
+   },
+   "France": {
+    "strategy": 0.859181247411209,
+    "null_median": 0.5751892649049436
+   },
+   "Germany": {
+    "strategy": 0.884826704330718,
+    "null_median": 0.606914371098722
+   },
+   "HongKong": {
+    "strategy": 0.6708750242118464,
+    "null_median": 0.4462678859820708
+   },
+   "Ireland": {
+    "strategy": 0.7459776256730449,
+    "null_median": 0.5358108068306522
+   },
+   "Italy": {
+    "strategy": 0.761560141391688,
+    "null_median": 0.5339033580562781
+   },
+   "Japan": {
+    "strategy": 0.7587116727296515,
+    "null_median": 0.5319217384513277
+   },
+   "Malaysia": {
+    "strategy": 0.8264409680752139,
+    "null_median": 0.24039340760415645
+   },
+   "Nethrlnd": {
+    "strategy": 1.0441703937780555,
+    "null_median": 0.6614204926049511
+   },
+   "NewZland": {
+    "strategy": 0.8016928884261368,
+    "null_median": 0.48261627832884624
+   },
+   "Norway": {
+    "strategy": 0.7204385720210332,
+    "null_median": 0.4963138504807184
+   },
+   "Singapor": {
+    "strategy": 0.7710520803815505,
+    "null_median": 0.5040025934282626
+   },
+   "Spain": {
+    "strategy": 0.8140374907645445,
+    "null_median": 0.5580432868558418
+   },
+   "Sweden": {
+    "strategy": 0.7829175986614177,
+    "null_median": 0.5194345034197199
+   },
+   "Swtzrlnd": {
+    "strategy": 0.8985498817919633,
+    "null_median": 0.6588802902406279
+   },
+   "UK": {
+    "strategy": 0.8965951047738605,
+    "null_median": 0.6010379979400269
+   }
+  },
+  "switches_per_country": {
+   "Austria": 29,
+   "Austrlia": 46,
+   "Belgium": 42,
+   "Canada": 35,
+   "Denmark": 22,
+   "Finland": 14,
+   "France": 36,
+   "Germany": 36,
+   "HongKong": 36,
+   "Ireland": 19,
+   "Italy": 27,
+   "Japan": 41,
+   "Malaysia": 10,
+   "Nethrlnd": 40,
+   "NewZland": 27,
+   "Norway": 45,
+   "Singapor": 42,
+   "Spain": 31,
+   "Sweden": 30,
+   "Swtzrlnd": 42,
+   "UK": 40
+  }
+ },
+ "runtime_s": 13.126358270645142
+}

@@ -1,0 +1,11 @@
+R0 as registered                               Sharpe 0.96 CAGR +17.9% worst fall -24.2% | 0.00% of random runs >= (median 0.60) | buy-and-hold Sharpe 0.63 CAGR +15.3%
+R1 T-bills as the safe asset                   Sharpe 0.81 CAGR +15.2% worst fall -25.3% | 0.00% of random runs >= (median 0.54) | buy-and-hold Sharpe 0.63 CAGR +15.3%
+R2 cash at 0% as the safe asset                Sharpe 0.61 CAGR +12.7% worst fall -25.4% | 0.00% of random runs >= (median 0.34) | buy-and-hold Sharpe 0.63 CAGR +15.3%
+R3 switch delayed one more month               Sharpe 0.89 CAGR +17.1% worst fall -25.8% | 0.00% of random runs >= (median 0.60) | buy-and-hold Sharpe 0.62 CAGR +15.1%
+R4 no January reset                            Sharpe 0.92 CAGR +17.4% worst fall -22.4% | 0.00% of random runs >= (median 0.59) | buy-and-hold Sharpe 0.60 CAGR +14.8%
+1987 crash           strategy -21.0% | buy-and-hold -21.7% | sleeves in stocks 52%
+Japan bust 1990-92   strategy +16.5% | buy-and-hold -6.1% | sleeves in stocks 41%
+1998 LTCM            strategy -1.8% | buy-and-hold -5.5% | sleeves in stocks 56%
+2000-02 bear         strategy +6.7% | buy-and-hold -30.5% | sleeves in stocks 26%
+
+sleeve-months in stocks 55%; runtime 81s

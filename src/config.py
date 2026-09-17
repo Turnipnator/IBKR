@@ -260,6 +260,37 @@ class TradingConfig:
 
 
 @dataclass
+class SleeveConfig:
+    """Attempt 9 forward-test sleeve — US absolute momentum in UCITS form.
+
+    Pre-registered in research/2026-09-17_forward_test/PREREG_9_ucits_forward_test.md (commit
+    ff98f9f): hold VUAA (S&P 500) while its 12-month total return beats IB01 (0-1yr Treasuries,
+    standing in for T-bills), otherwise hold IBTM (7-10yr Treasuries). It runs alongside the
+    momentum strategy inside the same account and is ring-fenced from it: its positions and cash
+    reserve are excluded from momentum sizing and the momentum settled-cash gate, its symbols never
+    get protective stops, and it trades at most once a calendar month.
+
+    Off by default: `SLEEVE_ENABLED=true` in .env is the switch that lets it trade.
+    """
+    enabled: bool = False
+    capital_base: float = 2500.0      # owner's decision 2026-09-17
+    equity_symbol: str = "VUAA"
+    bond_symbol: str = "IBTM"
+    hurdle_symbol: str = "IB01"       # never held
+    lookback_months: int = 12
+    cash_buffer: float = 0.02
+    hour: int = 14                    # 14:05 Europe/London, just after the momentum rebalance
+    minute: int = 5
+
+    @classmethod
+    def from_env(cls) -> "SleeveConfig":
+        return cls(
+            enabled=os.getenv("SLEEVE_ENABLED", "false").lower() == "true",
+            capital_base=float(os.getenv("SLEEVE_CAPITAL_BASE", "2500")),
+        )
+
+
+@dataclass
 class DataConfig:
     """Data storage configuration."""
     db_path: str = "data/trading.db"
@@ -295,4 +326,5 @@ class TelegramConfig:
 ibkr_config = IBKRConfig.from_env()
 trading_config = TradingConfig()
 data_config = DataConfig.from_env()
+sleeve_config = SleeveConfig.from_env()
 telegram_config = TelegramConfig.from_env()

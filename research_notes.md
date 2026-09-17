@@ -4,6 +4,61 @@ Protocol: `RESEARCH.md`. Newest study first. Scripts/results live under `researc
 
 ---
 
+## 2026-09-17 — Country absolute momentum (attempt 8, pass) and the live forward test (attempt 9, registered)
+
+**Question.** Attempt 5 passed on US data 1928–2007. Is the effect US-only, or does the same rule show timing
+value in other countries' markets? And can a UCITS version run live in this account without disturbing the
+momentum strategy?
+
+### 1–3. Hypotheses and method
+Pre-registered before any returns (`research/2026-09-17_countries/PREREG_8…`, `research/2026-09-17_forward_test/
+PREREG_9…`, commit `ff98f9f`; code `3e02c98`). **H8:** attempt 5's rule applied unchanged to each non-US market
+(12-month dollar return vs US T-bills; US 10-year Treasuries when out) beats random timing and buy-and-hold.
+**H0:** timing indistinguishable from random. Data: Ken French International Countries, section 1 (value-weighted
+dollar returns), 21 countries, 1975-01 on; the US T-bill and 10-year Treasury series imported from attempt 5, so
+they are identical. Equal-weight country sleeves reset each January, 0.07% + 5 bps per order, 1,000-run
+circular-shift nulls at 5 and 15 bps, threshold 0.625% (attempt 8), plus a breadth box.
+
+### 4. Evidence
+
+| | CAGR | Sharpe | Worst fall | Random runs ≥ |
+|---|---|---|---|---|
+| **Country absolute momentum** | **+17.9%** | **0.96** | −24.2% | **0.00%** (0 of 1,000) |
+| Equal-weight buy-and-hold, same countries | +15.3% | 0.63 | −36.8% | — |
+| Random-timing runs (median) | +12.5% | 0.60 | — | — |
+
+- **E1 (HIGH):** all eight boxes pass, including breadth — **21 of 21 countries** above their own random-timing
+  median. Two signal implementations agree on all 6,922 country-months; pooled country returns correlate 0.68
+  with the US market, confirming this is different data.
+- **E2 robustness (HIGH, post-registration, `6d1f9b4`):** timing beats random in every variant (0.00% throughout):
+  T-bills as safe asset 0.81, cash at 0% 0.61, a further month's execution delay 0.89, no January reset 0.92.
+  **But** with cash at 0% the Sharpe (0.61) no longer beats buy-and-hold (0.63): the *timing* is real, while the
+  *margin over buy-and-hold* leans on holding bonds when out — the same pattern as attempt 5's T-bill variant.
+- **E3 regimes (MEDIUM):** 2000–02 +6.7% vs −30.5%; Japan 1990–92 +16.5% vs −6.1%; 1998 −1.8% vs −5.5%; but the
+  fast 1987 crash −21.0% vs −21.7%, no help at all. In stocks 55% of country-months.
+- **E4 conformance fix (HIGH):** the first run withdrew on its own data check (Malaysia eligible one month past
+  the end of its data). Eligibility now requires a return for the execution month, matching §3. No returns were
+  computed before the fix.
+
+### 5. Self-critique
+- The literature already documents trend/absolute momentum internationally, so this confirms published work
+  rather than discovering something.
+- Dollar returns for a dollar investor: no FX hedging cost, no fund fees, no tax. A GBP investor's version is
+  untested here — and the only GBP test in this project (attempt 7) failed.
+- The safe asset does a lot of the work. Whether bonds keep hedging equities is a regime question, and 2022
+  showed they need not.
+- Same-close execution is forced by monthly data; the delayed variant says that is not what makes it work.
+
+### 6. Conclusion
+**H8 holds.** The effect is not US-only: it shows up in all 21 countries, with the timing significant in every
+robustness variant. Its edge over simply holding is materially smaller when the safe asset earns nothing.
+
+### 7. Actions
+Attempt 9, the live UCITS forward test, is registered and being built: a ring-fenced £2,500 sleeve
+(VUAA/IBTM, IB01 as hurdle) running beside the momentum strategy, judged on implementation fidelity, not profit.
+
+---
+
 ## 2026-09-15 — Pre-registered long-history and UK dual momentum tests (attempts 5–7)
 
 **Question.** Dual momentum's rules could not be re-tested on 2008–2026. Do the same ideas, unchanged, show timing

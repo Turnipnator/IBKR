@@ -66,6 +66,12 @@ CONTRACT_REGISTRY: dict[str, tuple[str, str]] = {
     "AIGS": ("USD", "LSEETF"),   # WisdomTree Broad Commodities USD (DBC proxy)
     # === alt ===
     "IDUP": ("USD", "LSEETF"),   # iShares US Property Yield UCITS USD
+    # Forward-test sleeve (attempt 9) — deliberately different lines from the momentum universe
+    # above so the two strategies can never hold the same symbol. IBTM is the GBP-quoted listing
+    # of the same fund as IDTM; VUAA and IB01 are accumulating, so raw closes are total returns.
+    "VUAA": ("USD", "LSEETF"),   # Vanguard S&P 500 UCITS USD Acc
+    "IBTM": ("GBP", "LSEETF"),   # iShares $ Treasury Bond 7-10yr UCITS (GBP line, magnifier 1)
+    "IB01": ("USD", "LSEETF"),   # iShares $ Treasury Bond 0-1yr UCITS USD Acc — hurdle only
 }
 
 

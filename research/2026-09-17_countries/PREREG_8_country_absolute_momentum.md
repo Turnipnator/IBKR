@@ -120,6 +120,55 @@ Attempts 8 and 9 added to `research/PREREGISTRATION_TEMPLATE.md` on registration
 
 ## 10. Results (written after the run)
 
-- **Run date and code commit:**
+- **Run date and code commit:** 2026-09-17, code `3e02c98`, rules `ff98f9f`; 1,000 random-timing runs per
+  slippage level. Window: signals 1975-12 → 2007-11, executed over 384 months (1976-01 → 2007-12), 21 countries.
+- **Conformance fix before any returns existed:** the first run withdrew on its own data check
+  (`Malaysia: 1`). Malaysia's signal is valid at its last data month (2001-10) but the execution month
+  2001-11 has no return, so the sleeve was still "eligible" after the data ended. §3 says a country leaves
+  when its data ends, so eligibility now requires a return for the execution month, and the data check looks
+  for gaps *inside* a country's window rather than at its end (commit `3e02c98`). No strategy returns were
+  computed before that fix.
+- **Headline:** CAGR +17.9% a year, Sharpe 0.96, worst fall −24.2%, volatility 11.9%; 100 → 19,402.
+  Equal-weight buy-and-hold of the same countries: CAGR +15.3%, Sharpe 0.63, worst fall −36.8%, 100 → 9,529.
+  Random-timing runs: Sharpe median 0.60 (5th/95th 0.52/0.70), CAGR median +12.5%. Average 32.9 switches per
+  country; sleeves were in stocks 55% of country-months.
 - **Figure for each §6 box:**
-- **Decision:**
+
+  | Box | Needed | Got | |
+  |---|---|---|---|
+  | 1 Beats random timing | ≤ 0.625% of runs at least as good | 0.00% (0 of 1,000) | ✓ |
+  | 2 Beats buy-and-hold | Sharpe above 0.63, or worst fall ≤ 18.4% with CAGR ≥ 13.3% | Sharpe 0.96; worst fall −24.2%; CAGR +17.9% | ✓ |
+  | 3 Enough decisions | ≥ 100 months and ≥ 15 switches per country | 384 months, 32.9 average | ✓ |
+  | 4 Sub-periods | at least 3 of 4 positive | 4 of 4 (+274.7%, +369.2%, +245.2%, +219.7%) | ✓ |
+  | 5 Stress slippage | ≤ 0.625% at 15 bps | 0.00% | ✓ |
+  | 6 Neighbours | above the random median (0.60) | 11 months 0.98; 13 months 0.91 | ✓ |
+  | 7 Fidelity and data | agreement, no interior gaps, pooled vs US corr < 0.95 | 0 disagreements in 6,922 country-months; corr 0.68 | ✓ |
+  | 8 Breadth | ≥ 14 of 21 countries above their own random median | 21 of 21 | ✓ |
+
+- **Decision:** **Pass** (all eight boxes). Under §7 this strengthens attempt 5's case that the effect is not
+  US-only. No money moves on it: the only live exposure remains the £2,500 forward-test sleeve (attempt 9).
+- **Post-registration robustness** (`robustness_8.py`, commit `6d1f9b4`, written before its results were seen):
+
+  | Variant | Sharpe | CAGR | Random runs ≥ |
+  |---|---|---|---|
+  | As registered | 0.96 | +17.9% | 0.00% |
+  | T-bills as the safe asset | 0.81 | +15.2% | 0.00% |
+  | Cash at 0% as the safe asset | 0.61 | +12.7% | 0.00% |
+  | Switch delayed one further month | 0.89 | +17.1% | 0.00% |
+  | No January reset | 0.92 | +17.4% | 0.00% |
+
+  The timing beats random in every variant. But the **margin over buy-and-hold depends on what it holds when
+  out**: with cash at 0% its Sharpe is 0.61 against buy-and-hold's 0.63. The declared monthly-execution
+  limitation does not drive it — a further month's delay still gives 0.89.
+
+  | Window | Strategy | Buy-and-hold | Sleeves in stocks |
+  |---|---|---|---|
+  | 1987 crash | −21.0% | −21.7% | 52% |
+  | Japan bust 1990–92 | +16.5% | −6.1% | 41% |
+  | 1998 LTCM | −1.8% | −5.5% | 56% |
+  | 2000–02 bear | +6.7% | −30.5% | 26% |
+
+- **Caveats, stated with the result:** dollar returns for a dollar investor, before fund fees, tax and any
+  currency hedging a GBP investor would face; the effect is already documented in the published literature;
+  it earns its keep in slow bear markets and did nothing in the fast 1987 crash; and the same rule's live-era
+  relatives failed (attempt 3 over 2008–2026, attempt 7 in the UK).

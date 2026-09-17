@@ -213,6 +213,28 @@ class DecisionEngine:
             return 1.0
         return rate
 
+    # ---- forward-test sleeve (attempt 9) ------------------------------------
+    # The sleeve (research/2026-09-17_forward_test/PREREG_9) runs a separate
+    # strategy inside the same account. Momentum must not size off its money,
+    # spend its cash, or treat its holdings as its own.
+
+    def _sleeve_symbols(self) -> set:
+        """Symbols owned by the forward-test sleeve; empty when it is off."""
+        sleeve = getattr(self, "sleeve", None)
+        try:
+            return sleeve.symbols if sleeve and sleeve.config.enabled else set()
+        except Exception:
+            return set()
+
+    def _sleeve_claim(self) -> float:
+        """Sleeve positions + cash reserve, in base currency (0 when off)."""
+        sleeve = getattr(self, "sleeve", None)
+        try:
+            return float(sleeve.claim_on_account()) if sleeve and sleeve.config.enabled else 0.0
+        except Exception as e:
+            logger.warning(f"Sleeve claim unavailable; sizing left unadjusted: {e}")
+            return 0.0
+
     def _calculate_target_positions(
         self,
         signals: dict[str, dict],
@@ -255,9 +277,10 @@ class DecisionEngine:
         # Symbols we still HOLD are never filtered — that would zero their target
         # and force a sale, which is the opposite of the intent.
         try:
+            sleeve_syms = self._sleeve_symbols()
             held = {
                 p.symbol for p in self.position_manager.get_positions()
-                if p.quantity != 0
+                if p.quantity != 0 and p.symbol not in sleeve_syms
             }
         except Exception as e:
             logger.warning(f"Could not fetch positions for cooldown filter: {e}")
@@ -516,6 +539,14 @@ class DecisionEngine:
         portfolio = self.position_manager.get_portfolio_value()
         net_liq = portfolio.get('net_liquidation', 0)
         sizing_capital = portfolio.get('sizing_capital') or net_liq
+        # Ring-fence the forward-test sleeve: its positions and cash reserve are
+        # not momentum's to size off. net_liq is deliberately left whole — the
+        # drawdown brakes compare it with a stored peak from before the sleeve
+        # existed, so subtracting here would fake an instant drawdown and halt.
+        sleeve_claim = self._sleeve_claim()
+        if sleeve_claim > 0:
+            sizing_capital = max(0.0, sizing_capital - sleeve_claim)
+            logger.info(f"Sleeve ring-fence: {sleeve_claim:,.2f} excluded from sizing capital")
         if net_liq <= 0 or sizing_capital <= 0:
             logger.error("Cannot get portfolio value")
             return []
@@ -675,7 +706,16 @@ class DecisionEngine:
             if raw is None:
                 return None
             val = float(raw)
-            return val if val >= 0 else None
+            if val < 0:
+                return None
+            # The sleeve's reserve is spoken for; momentum may not spend it.
+            sleeve = getattr(self, "sleeve", None)
+            try:
+                if sleeve and sleeve.config.enabled:
+                    val = max(0.0, val - float(sleeve.reserve()))
+            except Exception as e:
+                logger.warning(f"Sleeve reserve unavailable; settled cash not adjusted: {e}")
+            return val
         except Exception as e:  # never let a read failure block an entry
             logger.warning(f"Could not read AvailableFunds: {e}")
             return None

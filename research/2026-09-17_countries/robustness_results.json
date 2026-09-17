@@ -1,0 +1,89 @@
+{
+ "run_utc": "2026-09-17 08:44:10",
+ "n_null": 1000,
+ "variants": [
+  {
+   "variant": "R0 as registered",
+   "sharpe": 0.9589379596930043,
+   "cagr": 0.17894870263509954,
+   "maxdd": -0.24198624924374568,
+   "share_at_least_as_good": 0.0,
+   "null_sharpe_p50": 0.6021994091407913,
+   "null_sharpe_p95": 0.6980339747870342,
+   "bench_sharpe": 0.631985645733472,
+   "bench_cagr": 0.15304068867809617,
+   "bench_maxdd": -0.36757010630584463
+  },
+  {
+   "variant": "R1 T-bills as the safe asset",
+   "sharpe": 0.8137772126299446,
+   "cagr": 0.1519003591222583,
+   "maxdd": -0.25281016033237436,
+   "share_at_least_as_good": 0.0,
+   "null_sharpe_p50": 0.5432923988503995,
+   "null_sharpe_p95": 0.6445332201669245,
+   "bench_sharpe": 0.631985645733472,
+   "bench_cagr": 0.15304068867809617,
+   "bench_maxdd": -0.36757010630584463
+  },
+  {
+   "variant": "R2 cash at 0% as the safe asset",
+   "sharpe": 0.6101532220013849,
+   "cagr": 0.1273814674483409,
+   "maxdd": -0.25409587266211187,
+   "share_at_least_as_good": 0.0,
+   "null_sharpe_p50": 0.34241401127729626,
+   "null_sharpe_p95": 0.4393532486120544,
+   "bench_sharpe": 0.631985645733472,
+   "bench_cagr": 0.15304068867809617,
+   "bench_maxdd": -0.36757010630584463
+  },
+  {
+   "variant": "R3 switch delayed one more month",
+   "sharpe": 0.891485627815244,
+   "cagr": 0.17133253759802347,
+   "maxdd": -0.2582973610414031,
+   "share_at_least_as_good": 0.0,
+   "null_sharpe_p50": 0.5965040959138239,
+   "null_sharpe_p95": 0.6928636248518804,
+   "bench_sharpe": 0.6233651812967546,
+   "bench_cagr": 0.15128372098206944,
+   "bench_maxdd": -0.36757010630584463
+  },
+  {
+   "variant": "R4 no January reset",
+   "sharpe": 0.9182801003311717,
+   "cagr": 0.1741602502118591,
+   "maxdd": -0.22354443932255408,
+   "share_at_least_as_good": 0.0,
+   "null_sharpe_p50": 0.5866310033991051,
+   "null_sharpe_p95": 0.6804458254211135,
+   "bench_sharpe": 0.5975401600332919,
+   "bench_cagr": 0.14792701744234749,
+   "bench_maxdd": -0.40703727165001236
+  }
+ ],
+ "months_in_stocks_share": 0.5458829365079365,
+ "crises": {
+  "1987 crash": {
+   "strategy": -0.21011718764095544,
+   "buy_and_hold": -0.2173098764857384,
+   "months_in_stocks": 0.5238095238095238
+  },
+  "Japan bust 1990-92": {
+   "strategy": 0.1652272021508201,
+   "buy_and_hold": -0.061488198036979025,
+   "months_in_stocks": 0.41005291005291006
+  },
+  "1998 LTCM": {
+   "strategy": -0.018484716670786105,
+   "buy_and_hold": -0.054995442609837575,
+   "months_in_stocks": 0.5595238095238095
+  },
+  "2000-02 bear": {
+   "strategy": 0.06669681866586408,
+   "buy_and_hold": -0.30528753104034323,
+   "months_in_stocks": 0.2604166666666667
+  }
+ }
+}
