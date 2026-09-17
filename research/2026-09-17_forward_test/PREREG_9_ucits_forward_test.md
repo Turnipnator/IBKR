@@ -136,6 +136,13 @@ proceeds instead of the £2,500 capital base — and the sleeve would have spent
 amount. The reserve is now read (and therefore seeded) before anything touches it, with a regression
 test. The old code hid this: it bought one share with the mis-seeded reserve and the test passed.
 
+**Enabled live 2026-09-17 14:02 UTC.** The sleeve made its September decision that afternoon rather
+than on the first trading day of the month, because that is the day it was switched on. The decision
+uses August's month-end closes either way, so it is the same signal the 1 September run would have
+made: **VUAA 12-month +21.44% vs IB01 +3.79% → hold VUAA**. Normal cadence resumes on the first
+trading day of October. No order was placed: with £157.98 of settled cash a single share is £112, and
+the tranche rule correctly held off. Reserve £2,500 intact, month recorded as `pending_cash`.
+
 ## 10. Results (written as the months come in)
 
 - **First trade date and code commit:**
