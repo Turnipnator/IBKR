@@ -221,11 +221,26 @@ class SleeveStrategy:
             return out
         cost = (res.fill_price or 0) * (res.filled_quantity or qty)
         self.db.record_sleeve_order(month, "BUY", target, qty, res.order_id, res.fill_price)
+        left = self.reserve()
         if cost:
             left = self.db.add_sleeve_reserve(-self._to_base(target, cost))
             logger.info(f"Sleeve: bought {qty} {target}; {left:,.0f} base still to invest")
         out["status"] = "traded"
+        self._notify(
+            f"Bought <b>{qty} {target}</b>" + (f" @ {res.fill_price:,.2f}" if res.fill_price else ""),
+            [f"{left:,.0f} of {self.config.capital_base:,.0f} still to invest"
+             if left >= self.config.min_order_base else "Fully invested."],
+        )
         return out
+
+    def _notify(self, headline: str, lines: Optional[list] = None) -> None:
+        """Telegram, best effort — the sleeve never fails because a message could not be sent."""
+        if not (self.notifier and getattr(self.notifier, "enabled", False)):
+            return
+        try:
+            self.notifier.notify_sleeve(headline, lines or [])
+        except Exception as e:
+            logger.debug(f"Sleeve: Telegram notify failed: {e}")
 
     def rebalance(self, now_local: Optional[datetime] = None, dry_run: bool = False) -> dict:
         """Run this month's decision. Returns a summary dict; never raises."""
@@ -281,17 +296,15 @@ class SleeveStrategy:
             out["status"] = "already_held"
 
         self.db.set_sleeve_month(month, sig.target, out["status"])
-        if self.notifier and getattr(self.notifier, "enabled", False):
-            try:
-                self.notifier.notify_error(
-                    f"Sleeve {month}: hold {sig.target} "
-                    f"({self.config.equity_symbol} 12m {sig.r_stocks:+.1%} vs {sig.r_hurdle:+.1%})\n"
-                    + "\n".join(f"{o['action']} {o['quantity']} {o['symbol']} — "
-                                f"{'ok' if o['ok'] else 'FAILED: ' + str(o['message'])}" for o in out["orders"]),
-                    "Forward-test sleeve",
-                )
-            except Exception as e:
-                logger.debug(f"Sleeve: Telegram notify failed: {e}")
+        detail = [
+            f"{self.config.equity_symbol} 12m {sig.r_stocks:+.1%} vs cash {sig.r_hurdle:+.1%} "
+            f"(as of {sig.asof})",
+        ]
+        detail += [f"{o['action']} {o['quantity']} {o['symbol']} — "
+                   f"{'ok' if o['ok'] else 'FAILED: ' + str(o['message'])}" for o in out["orders"]]
+        if out["status"] == "pending_cash":
+            detail.append("Waiting for settled cash before buying.")
+        self._notify(f"<b>{month}</b> — hold <b>{sig.target}</b>", detail)
         return out
 
     def retry_pending(self) -> dict:

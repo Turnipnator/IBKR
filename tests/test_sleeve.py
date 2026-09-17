@@ -403,3 +403,73 @@ def test_a_switch_sell_as_the_first_action_does_not_reseed_the_reserve(tmp_path)
     s.rebalance(datetime(2026, 9, 1, 14, 6))       # fresh database: no sleeve_account row yet
     buys = [o for o in orders.placed if o[1] == OrderAction.BUY]
     assert buys and buys[0][2] == 24               # (2500 + 200 proceeds) / (147 x 0.75 x 1.02)
+
+
+# ---------------------------------------------------------------- Telegram
+class FakeNotifier:
+    """Records what would be sent. `enabled` mirrors the real notifier's gate."""
+    def __init__(self, enabled=True, explode=False):
+        self.enabled = enabled
+        self.explode = explode
+        self.sleeve_messages = []
+        self.errors = []
+
+    def notify_sleeve(self, headline, lines=None):
+        if self.explode:
+            raise RuntimeError("telegram down")
+        self.sleeve_messages.append((headline, list(lines or [])))
+        return True
+
+    def notify_error(self, message, context=""):
+        self.errors.append((message, context))
+        return True
+
+
+def _with_notifier(tmp_path, notifier, **kw):
+    s, orders, db = _part_funded(tmp_path, **kw)
+    s.notifier = notifier
+    return s, orders, db
+
+
+def test_a_funding_tranche_is_announced(tmp_path):
+    n = FakeNotifier()
+    s, _, _ = _with_notifier(tmp_path, n, available=800.0)
+    assert s.retry_pending()["status"] == "traded"
+    headline, lines = n.sleeve_messages[0]
+    assert "7 VUAA" in headline
+    assert any("still to invest" in line for line in lines)
+    assert n.errors == []                       # routine activity is not an error alert
+
+
+def test_a_deferred_tranche_says_nothing(tmp_path):
+    """No message when nothing happened — otherwise the daily hook would chatter every loop pass."""
+    n = FakeNotifier()
+    s, _, _ = _with_notifier(tmp_path, n, available=300.0)
+    assert s.retry_pending()["status"] == "noop"
+    assert n.sleeve_messages == []
+
+
+def test_the_monthly_decision_is_announced_as_sleeve_activity_not_an_error(tmp_path):
+    last = pd.Timestamp("2026-08-31")
+    frames = {"VUAA": bars(last, 14, 100, 1.01), "IB01": bars(last, 14, 100, 1.002)}
+    n = FakeNotifier()
+    s, _, _ = make_sleeve(tmp_path, frames=frames, prices={"VUAA": 147.0}, available=5000.0)
+    s.notifier = n
+    s.rebalance(datetime(2026, 9, 1, 14, 6))
+    assert n.errors == []
+    headlines = " ".join(h for h, _ in n.sleeve_messages)
+    assert "2026-09" in headlines and "VUAA" in headlines
+    assert any("12m" in line for _, lines in n.sleeve_messages for line in lines)
+
+
+def test_a_telegram_failure_never_breaks_the_sleeve(tmp_path):
+    s, orders, _ = _with_notifier(tmp_path, FakeNotifier(explode=True), available=800.0)
+    assert s.retry_pending()["status"] == "traded"      # the order still went in
+    assert len(orders.placed) == 1
+
+
+def test_a_disabled_notifier_is_left_alone(tmp_path):
+    n = FakeNotifier(enabled=False)
+    s, _, _ = _with_notifier(tmp_path, n, available=800.0)
+    assert s.retry_pending()["status"] == "traded"
+    assert n.sleeve_messages == []

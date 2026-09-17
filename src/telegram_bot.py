@@ -231,6 +231,25 @@ class TelegramNotifier:
 """
         return self.send_sync(message.strip())
 
+    def notify_sleeve(self, headline: str, lines: Optional[list] = None) -> bool:
+        """Forward-test sleeve activity — a monthly decision or a funding tranche.
+
+        Its own message type on purpose: this is routine, expected activity, and routing it through
+        notify_error (as the first build did) puts a red alert emoji on a normal month and teaches
+        the reader to ignore the ones that matter.
+        """
+        emoji = "\U0001F9ED"  # Compass
+        body = "\n".join(f"{line}" for line in (lines or []))
+        message = f"""
+{emoji} <b>Sleeve</b>
+
+{headline}
+{body}
+
+<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+        return self.send_sync(message.strip())
+
     def notify_bot_started(self, mode: str = "DRY RUN") -> bool:
         """Send notification when bot starts."""
         emoji = "\U0001F680"  # Rocket
