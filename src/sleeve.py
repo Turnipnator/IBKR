@@ -53,6 +53,7 @@ class SleeveStrategy:
         self.db = db
         self.notifier = notifier
         self.config = config or sleeve_config
+        self._last_deferral = None    # what the last "still waiting" line said, see _defer()
 
     # ------------------------------------------------------------------ helpers
     @property
@@ -163,9 +164,13 @@ class SleeveStrategy:
         unit = float(price) * rate * (1.0 + self.config.cash_buffer)
         return unit if unit > 0 else 0.0
 
-    def _affordable(self, symbol: str, budget_base: float) -> int:
-        """Whole shares of `symbol` that `budget_base` covers, keeping the cash buffer."""
-        unit = self._unit_base(symbol)
+    def _affordable(self, symbol: str, budget_base: float, unit: Optional[float] = None) -> int:
+        """Whole shares of `symbol` that `budget_base` covers, keeping the cash buffer.
+
+        Pass `unit` (from `_unit_base`) when the caller already has it, to avoid fetching the price twice.
+        """
+        if unit is None:
+            unit = self._unit_base(symbol)
         if unit <= 0:
             return 0
         return int(max(0.0, budget_base) / unit)
@@ -194,24 +199,40 @@ class SleeveStrategy:
         """
         reserve = self.reserve()
         spendable = self._spendable()
-        qty = self._affordable(target, spendable)
+        # The daily hook asks on every loop pass, but settled cash only moves when proceeds settle. Two
+        # cases defer whatever the share price is, so they are decided before fetching one:
+        #  * below the order floor, no tranche can reach it;
+        #  * below the tranche minimum, only a finishing tranche may go in, and a tranche (at least one
+        #    share, leaving less than one share's worth) can only finish the reserve if the reserve is
+        #    under twice the spendable cash.
+        below_floor = spendable < self.config.min_order_base
+        if below_floor or (spendable < self.config.min_topup_base and reserve >= 2 * spendable):
+            why = (f"below the {self.config.min_order_base:,.0f} order floor" if below_floor else
+                   f"below the {self.config.min_topup_base:,.0f} minimum and cannot be the last tranche")
+            return self._defer(
+                target, ("cash", round(spendable), round(reserve)),
+                f"Sleeve: {target} buy deferred — {spendable:,.0f} base of settled cash against "
+                f"{reserve:,.0f} still to invest is {why}, waiting for more settled cash rather than "
+                "paying a flat commission on a small order"
+            )
+        unit = self._unit_base(target)
+        qty = self._affordable(target, spendable, unit)
         if qty < 1:
-            logger.info(
+            return self._defer(
+                target, ("shares", round(spendable), round(reserve)),
                 f"Sleeve: {target} buy deferred — reserve {reserve:,.0f} and settled cash cover 0 shares; "
                 "will retry at the next close"
             )
-            return {"status": "pending_cash", "quantity": 0}
-        unit = self._unit_base(target)
         value = qty * unit
         finishes = (reserve - value) < unit      # nothing left that could buy another share
         if (value < self.config.min_topup_base and not finishes) or value < self.config.min_order_base:
-            logger.info(
+            return self._defer(
+                target, ("tranche", round(value), round(reserve)),
                 f"Sleeve: {target} tranche would be {value:,.0f} base of {reserve:,.0f} still to invest "
                 f"— below the {self.config.min_topup_base:,.0f} minimum and not the last tranche, waiting "
                 "for more settled cash "
                 "rather than paying a flat commission on a small order"
             )
-            return {"status": "pending_cash", "quantity": 0}
         reason = "sleeve entry (retry)" if retry else "sleeve entry"
         res = self.order_manager.place_market_order(target, OrderAction.BUY, qty, reason=reason)
         out = {"status": "buy_failed", "quantity": qty, "symbol": target,
@@ -232,6 +253,20 @@ class SleeveStrategy:
              if left >= self.config.min_order_base else "Fully invested."],
         )
         return out
+
+    def _defer(self, target: str, key: tuple, message: str) -> dict:
+        """Log a funding deferral, then report it as pending cash.
+
+        The daily hook repeats itself every loop pass (~90 s), so a deferral already logged today with
+        the same figures goes to DEBUG; a new day, reason or figure is logged at INFO.
+        """
+        key = (datetime.now().date(), target) + key
+        if key == self._last_deferral:
+            logger.debug(message)
+        else:
+            logger.info(message)
+            self._last_deferral = key
+        return {"status": "pending_cash", "quantity": 0}
 
     def _notify(self, headline: str, lines: Optional[list] = None) -> None:
         """Telegram, best effort — the sleeve never fails because a message could not be sent."""

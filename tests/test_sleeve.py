@@ -12,6 +12,7 @@ The ring-fencing rules under test (PREREG_9 §3):
   4. a momentum drawdown halt does not liquidate the sleeve
   5. one decision per calendar month, restart-safe
 """
+import logging
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -49,12 +50,14 @@ class FakeFetcher:
         self.frames = frames
         self.prices = prices or {}
         self.calls = []
+        self.price_calls = []
 
     def get_historical_data(self, symbol, duration="1 Y", bar_size="1 day", what_to_show="TRADES", **kw):
         self.calls.append((symbol, duration, bar_size, what_to_show))
         return self.frames.get(symbol)
 
     def get_latest_prices(self, symbols):
+        self.price_calls.append(tuple(symbols))
         return {s: self.prices.get(s) for s in symbols if self.prices.get(s)}
 
 
@@ -473,3 +476,130 @@ def test_a_disabled_notifier_is_left_alone(tmp_path):
     s, _, _ = _with_notifier(tmp_path, n, available=800.0)
     assert s.retry_pending()["status"] == "traded"
     assert n.sleeve_messages == []
+
+
+# ------------------------------------------------- the daily hook's cost (healthcheck 2026-09-18)
+# retry_pending runs every ~90 s loop pass. With £157.98 settled against a £2,500 reserve it fetched
+# VUAA's price twice a pass and logged the same "tranche would be 113" line each time — over half the
+# day's log. Settled cash only moves when proceeds settle, so a pass that cannot trade should cost
+# nothing and say so once.
+def _pending(tmp_path, *, available, reserve=2500.0, month=None):
+    """This month's target decided, nothing bought yet: the state the sleeve went live in."""
+    db = Database(str(tmp_path / "sleeve.db"))
+    db.get_sleeve_reserve(2500.0)
+    if reserve != 2500.0:
+        db.add_sleeve_reserve(reserve - 2500.0)
+    db.set_sleeve_month(month or datetime.now().strftime("%Y-%m"), "VUAA", "pending_cash")
+    s, orders, _ = make_sleeve(tmp_path, prices={"VUAA": 147.0}, available=available, db=db)
+    return s, orders, db
+
+
+def _set_available(s, available):
+    s.connection.get_account_summary = lambda: {"AvailableFunds": {"value": str(available)}}
+
+
+def test_the_live_deferral_is_decided_without_fetching_a_price(tmp_path):
+    """The 2026-09-18 state: no share price makes £158 a tranche against £2,500 still to invest."""
+    s, orders, db = _pending(tmp_path, available=157.98)
+    for _ in range(3):
+        assert s.retry_pending()["status"] == "noop"
+    assert s.fetcher.price_calls == []
+    assert orders.placed == []
+    assert db.get_sleeve_month(datetime.now().strftime("%Y-%m"))["status"] == "pending_cash"
+
+
+def test_cash_below_the_order_floor_is_decided_without_fetching_a_price(tmp_path):
+    s, orders, _ = _pending(tmp_path, available=100.0, reserve=200.0)   # even the last tranche
+    assert s.retry_pending()["status"] == "noop"
+    assert s.fetcher.price_calls == [] and orders.placed == []
+
+
+def test_a_pass_that_needs_the_price_fetches_it_once(tmp_path):
+    s, orders, _ = _part_funded(tmp_path, available=800.0)
+    assert s.retry_pending()["status"] == "traded"
+    assert s.fetcher.price_calls == [("VUAA",)]
+
+
+def test_a_possible_last_tranche_is_still_priced(tmp_path):
+    """£400 against £700 left: whether that finishes the job depends on the share price, so it is
+    fetched (once) — here 3 shares at ~£112.46 would leave £363, which is not a last tranche."""
+    s, orders, _ = _pending(tmp_path, available=400.0, reserve=700.0)
+    assert s.retry_pending()["status"] == "noop"
+    assert s.fetcher.price_calls == [("VUAA",)]
+    assert orders.placed == []
+
+
+def _old_rule(reserve, spendable, unit, config):
+    """The funding decision as it stood before the price-free shortcut (commit 714e6ac)."""
+    qty = int(max(0.0, spendable) / unit) if unit > 0 else 0
+    if qty < 1:
+        return 0
+    value = qty * unit
+    finishes = (reserve - value) < unit
+    if (value < config.min_topup_base and not finishes) or value < config.min_order_base:
+        return 0
+    return qty
+
+
+def test_the_price_free_shortcut_never_changes_a_decision(tmp_path):
+    """Every (reserve, settled cash, price) on a grid spanning the floor, the tranche minimum and
+    shares dearer than the whole reserve: the real _fund_target must buy exactly what the old rule
+    bought, and skip the price fetch only where the old rule deferred."""
+    s, orders, _ = _pending(tmp_path, available=0.0)
+    reserves = [0.0, 100.0, 150.0, 300.0, 499.0, 500.0, 700.0, 1000.0, 1500.0, 2275.0, 2500.0]
+    availables = [0.0, 50.0, 149.99, 150.0, 157.98, 250.0, 300.0, 400.0, 499.99, 500.0, 800.0, 1300.0, 5000.0]
+    prices = [20.0, 100.0, 147.0, 400.0, 900.0, 3000.0, 4000.0]
+    checked = shortcut = 0
+    for reserve in reserves:
+        for available in availables:
+            for price in prices:
+                s.reserve = lambda r=reserve: r
+                _set_available(s, available)
+                s.fetcher.prices = {"VUAA": price}
+                s.fetcher.price_calls = []
+                orders.placed.clear()
+                unit = price * 0.75 * 1.02
+                want = _old_rule(reserve, min(reserve, available), unit, s.config)
+                out = s._fund_target("2026-09", "VUAA", retry=True)
+                got = orders.placed[0][2] if orders.placed else 0
+                assert got == want, (reserve, available, price, got, want)
+                assert out["status"] == ("traded" if want else "pending_cash")
+                if not s.fetcher.price_calls:
+                    shortcut += 1
+                    assert want == 0, (reserve, available, price)
+                else:
+                    assert len(s.fetcher.price_calls) == 1
+                checked += 1
+    assert checked == len(reserves) * len(availables) * len(prices)
+    assert shortcut > checked // 3          # the shortcut does the bulk of the work
+
+
+def test_an_unchanged_deferral_is_logged_once_a_day(tmp_path, caplog, monkeypatch):
+    class Clock(datetime):
+        now_value = datetime(2026, 9, 18, 8, 20)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.now_value
+
+    monkeypatch.setattr("src.sleeve.datetime", Clock)
+    s, _, _ = _pending(tmp_path, available=157.98, month="2026-09")
+    caplog.set_level(logging.DEBUG, logger="src.sleeve")
+
+    def lines(level):
+        return [r.getMessage() for r in caplog.records if r.name == "src.sleeve" and r.levelno == level]
+
+    for _ in range(3):
+        s.retry_pending()
+    assert len(lines(logging.INFO)) == 1
+    assert "158 base of settled cash against 2,500" in lines(logging.INFO)[0]
+    assert len(lines(logging.DEBUG)) == 2           # the repeats are still there at DEBUG
+
+    _set_available(s, 300.0)                        # settled cash moved: say so
+    s.retry_pending()
+    assert len(lines(logging.INFO)) == 2 and "300 base" in lines(logging.INFO)[1]
+
+    Clock.now_value = datetime(2026, 9, 21, 7, 5)   # next trading day, same figure: once more
+    s.retry_pending()
+    s.retry_pending()
+    assert len(lines(logging.INFO)) == 3
