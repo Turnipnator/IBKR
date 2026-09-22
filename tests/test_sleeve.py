@@ -62,10 +62,20 @@ class FakeFetcher:
 
 
 class FakeOrders:
+    """Stands in for OrderManager, returning exactly what the real one returns.
+
+    `OrderManager.place_market_order` returns as soon as IBKR accepts the submission: success=True
+    with an orderId, and **no fill_price and no filled_quantity** (src/orders.py). This fake used to
+    hand back `fill_price=10.0, filled_quantity=qty`, which is a contract the production code has
+    never honoured — so the whole suite passed while the live sleeve could not decrement its reserve
+    at all. Keep this in step with the real OrderResult; fills arrive via `on_order_settled`.
+    """
+
     def __init__(self, result=None):
         self.placed = []
         self.result = result or (lambda symbol, action, qty: OrderResult(
-            success=True, order_id=100 + len(self.placed), fill_price=10.0, filled_quantity=qty))
+            success=True, order_id=100 + len(self.placed),
+            message=f"Market order submitted: {action} {qty} {symbol}"))
 
     def place_market_order(self, symbol, action, quantity, reason=None):
         self.placed.append((symbol, action, quantity, reason))
@@ -151,7 +161,7 @@ def test_rebalance_sells_the_old_line_then_buys_the_target(tmp_path):
     actions = [(sym, act, qty) for sym, act, qty, _ in orders.placed]
     assert actions[0] == ("IBTM", OrderAction.SELL, 20)
     assert actions[1][0] == "VUAA" and actions[1][1] == OrderAction.BUY
-    assert out["status"] == "traded"
+    assert out["status"] == "placed"       # accepted by IBKR; "traded" waits on the fill
     assert db.sleeve_month_done("2026-09") is True
 
 
@@ -172,9 +182,9 @@ def test_retry_completes_the_deferred_buy_once_cash_settles(tmp_path):
     db.set_sleeve_month(datetime.now().strftime("%Y-%m"), "VUAA", "pending_cash")
     s, orders, _ = make_sleeve(tmp_path, frames=frames, prices={"VUAA": 147.0}, available=5000.0, db=db)
     out = s.retry_pending()
-    assert out["status"] == "traded"
+    assert out["status"] == "placed"
     assert orders.placed[0][0] == "VUAA" and orders.placed[0][1] == OrderAction.BUY
-    assert db.get_sleeve_month(datetime.now().strftime("%Y-%m"))["status"] == "traded"
+    assert db.get_sleeve_month(datetime.now().strftime("%Y-%m"))["status"] == "placed"
 
 
 def test_spendable_is_capped_by_both_reserve_and_settled_cash(tmp_path):
@@ -337,11 +347,18 @@ def _part_funded(tmp_path, *, available, reserve_spent=225.0, held_qty=2):
 def test_sleeve_keeps_buying_a_partly_funded_position_as_cash_settles(tmp_path):
     s, orders, db = _part_funded(tmp_path, available=800.0)
     out = s.retry_pending()
-    assert out["status"] == "traded"
+    assert out["status"] == "placed"
     symbol, action, qty, _ = orders.placed[0]
     assert (symbol, action) == ("VUAA", OrderAction.BUY)
     assert qty == 7                                # 800 / (147 x 0.75 x 1.02) = 7 whole shares
-    assert db.get_sleeve_reserve(2500.0) < 2275.0  # the reserve fell by what was spent
+    # Placement does not touch the reserve — only the fill does. What it DOES do is commit the
+    # cost, so a second pass cannot spend the same money.
+    assert db.get_sleeve_reserve(2500.0) == pytest.approx(2275.0)
+    assert db.sleeve_committed_base() == pytest.approx(7 * 147 * 0.75 * 1.02)
+    buy_id = db.sleeve_unsettled_orders()[0]["order_id"]
+    s.on_order_settled(buy_id, "FILLED", fill_price=147.0, filled_quantity=7)
+    assert db.get_sleeve_reserve(2500.0) == pytest.approx(2275.0 - 7 * 147 * 0.75)
+    assert db.sleeve_committed_base() == pytest.approx(0.0)
 
 
 def test_a_small_tranche_waits_rather_than_paying_a_flat_commission(tmp_path):
@@ -355,14 +372,14 @@ def test_the_last_tranche_is_allowed_even_though_it_is_small(tmp_path):
     """Once what is left cannot buy another share, the small order is the finishing one."""
     s, orders, _ = _part_funded(tmp_path, available=5000.0, reserve_spent=2200.0)
     out = s.retry_pending()                        # £300 left, shares cost ~£112.5
-    assert out["status"] == "traded"
+    assert out["status"] == "placed"
     assert orders.placed[0][2] == 2
 
 
 def test_only_one_sleeve_order_a_day(tmp_path):
     """The hook runs every loop pass, and IBKR's settled-cash figure is a lagging cache."""
     s, orders, db = _part_funded(tmp_path, available=800.0)
-    assert s.retry_pending()["status"] == "traded"
+    assert s.retry_pending()["status"] == "placed"
     assert s.retry_pending()["status"] == "noop"   # same day, second pass
     assert s.retry_pending()["status"] == "noop"
     assert len(orders.placed) == 1
@@ -405,7 +422,14 @@ def test_a_switch_sell_as_the_first_action_does_not_reseed_the_reserve(tmp_path)
                                 prices={"VUAA": 147.0, "IBTM": 124.0})
     s.rebalance(datetime(2026, 9, 1, 14, 6))       # fresh database: no sleeve_account row yet
     buys = [o for o in orders.placed if o[1] == OrderAction.BUY]
-    assert buys and buys[0][2] == 24               # (2500 + 200 proceeds) / (147 x 0.75 x 1.02)
+    # The sale has not settled, so its proceeds are not spendable yet: the buy is sized off the
+    # £2,500 capital base alone. What must never happen is the reserve being CREATED from the
+    # proceeds — that would leave the sleeve investing £200 for the rest of its life.
+    assert buys and buys[0][2] == 22               # 2500 / (147 x 0.75 x 1.02)
+    assert db.get_sleeve_reserve(2500.0) == pytest.approx(2500.0)
+    sell_id = [r["order_id"] for r in db.sleeve_unsettled_orders() if r["action"] == "SELL"][0]
+    s.on_order_settled(sell_id, "FILLED", fill_price=124.0, filled_quantity=20)
+    assert db.get_sleeve_reserve(2500.0) == pytest.approx(2500.0 + 20 * 124.0)  # IBTM is the GBP line
 
 
 # ---------------------------------------------------------------- Telegram
@@ -434,10 +458,17 @@ def _with_notifier(tmp_path, notifier, **kw):
     return s, orders, db
 
 
-def test_a_funding_tranche_is_announced(tmp_path):
+def test_a_funding_tranche_is_announced_when_it_fills_not_when_it_is_sent(tmp_path):
+    """Placement claimed "Bought 7 VUAA" before IBKR had accepted anything. On 2026-09-22 that
+    message went out for an order rejected 4m38s later, alongside "2,500 of 2,500 still to
+    invest" — the two halves of the same message contradicting each other."""
     n = FakeNotifier()
-    s, _, _ = _with_notifier(tmp_path, n, available=800.0)
-    assert s.retry_pending()["status"] == "traded"
+    s, _, db = _with_notifier(tmp_path, n, available=800.0)
+    assert s.retry_pending()["status"] == "placed"
+    assert n.sleeve_messages == []               # nothing has happened yet, so nothing is claimed
+
+    buy_id = db.sleeve_unsettled_orders()[0]["order_id"]
+    s.on_order_settled(buy_id, "FILLED", fill_price=147.0, filled_quantity=7)
     headline, lines = n.sleeve_messages[0]
     assert "7 VUAA" in headline
     assert any("still to invest" in line for line in lines)
@@ -467,14 +498,16 @@ def test_the_monthly_decision_is_announced_as_sleeve_activity_not_an_error(tmp_p
 
 def test_a_telegram_failure_never_breaks_the_sleeve(tmp_path):
     s, orders, _ = _with_notifier(tmp_path, FakeNotifier(explode=True), available=800.0)
-    assert s.retry_pending()["status"] == "traded"      # the order still went in
+    assert s.retry_pending()["status"] == "placed"      # the order still went in
     assert len(orders.placed) == 1
 
 
 def test_a_disabled_notifier_is_left_alone(tmp_path):
     n = FakeNotifier(enabled=False)
-    s, _, _ = _with_notifier(tmp_path, n, available=800.0)
-    assert s.retry_pending()["status"] == "traded"
+    s, _, db = _with_notifier(tmp_path, n, available=800.0)
+    assert s.retry_pending()["status"] == "placed"
+    s.on_order_settled(db.sleeve_unsettled_orders()[0]["order_id"], "FILLED",
+                       fill_price=147.0, filled_quantity=7)
     assert n.sleeve_messages == []
 
 
@@ -516,7 +549,7 @@ def test_cash_below_the_order_floor_is_decided_without_fetching_a_price(tmp_path
 
 def test_a_pass_that_needs_the_price_fetches_it_once(tmp_path):
     s, orders, _ = _part_funded(tmp_path, available=800.0)
-    assert s.retry_pending()["status"] == "traded"
+    assert s.retry_pending()["status"] == "placed"
     assert s.fetcher.price_calls == [("VUAA",)]
 
 
@@ -527,6 +560,15 @@ def test_a_possible_last_tranche_is_still_priced(tmp_path):
     assert s.retry_pending()["status"] == "noop"
     assert s.fetcher.price_calls == [("VUAA",)]
     assert orders.placed == []
+
+
+def _clear_sleeve_orders(db):
+    conn = db._get_connection()
+    try:
+        conn.execute("DELETE FROM sleeve_orders")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _old_rule(reserve, spendable, unit, config):
@@ -545,7 +587,7 @@ def test_the_price_free_shortcut_never_changes_a_decision(tmp_path):
     """Every (reserve, settled cash, price) on a grid spanning the floor, the tranche minimum and
     shares dearer than the whole reserve: the real _fund_target must buy exactly what the old rule
     bought, and skip the price fetch only where the old rule deferred."""
-    s, orders, _ = _pending(tmp_path, available=0.0)
+    s, orders, db = _pending(tmp_path, available=0.0)
     reserves = [0.0, 100.0, 150.0, 300.0, 499.0, 500.0, 700.0, 1000.0, 1500.0, 2275.0, 2500.0]
     availables = [0.0, 50.0, 149.99, 150.0, 157.98, 250.0, 300.0, 400.0, 499.99, 500.0, 800.0, 1300.0, 5000.0]
     prices = [20.0, 100.0, 147.0, 400.0, 900.0, 3000.0, 4000.0]
@@ -558,12 +600,15 @@ def test_the_price_free_shortcut_never_changes_a_decision(tmp_path):
                 s.fetcher.prices = {"VUAA": price}
                 s.fetcher.price_calls = []
                 orders.placed.clear()
+                # Each point on the grid is an independent scenario: drop the rows the previous
+                # one wrote, or their reserved cost would be netted off this one's reserve.
+                _clear_sleeve_orders(db)
                 unit = price * 0.75 * 1.02
                 want = _old_rule(reserve, min(reserve, available), unit, s.config)
                 out = s._fund_target("2026-09", "VUAA", retry=True)
                 got = orders.placed[0][2] if orders.placed else 0
                 assert got == want, (reserve, available, price, got, want)
-                assert out["status"] == ("traded" if want else "pending_cash")
+                assert out["status"] == ("placed" if want else "pending_cash")
                 if not s.fetcher.price_calls:
                     shortcut += 1
                     assert want == 0, (reserve, available, price)

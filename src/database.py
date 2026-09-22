@@ -155,7 +155,14 @@ class Database:
                     quantity INTEGER NOT NULL,
                     order_id INTEGER,
                     fill_price REAL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    -- SUBMITTED at placement; FILLED/REJECTED/CANCELLED once
+                    -- IBKR says what happened. Only a SUBMITTED row may settle,
+                    -- which is what keeps a replayed event from spending twice.
+                    status TEXT,
+                    est_base REAL,
+                    filled_quantity INTEGER,
+                    settled_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS sleeve_account (
@@ -178,6 +185,18 @@ class Database:
                 "ALTER TABLE trades ADD COLUMN pnl REAL",
                 "ALTER TABLE trades ADD COLUMN commission REAL",
                 "ALTER TABLE trades ADD COLUMN currency TEXT",
+                # 2026-09-22: sleeve orders are settled from IBKR's own order
+                # events, not from placement. `status` is what makes settlement
+                # idempotent; `est_base` is the cost reserved at placement so an
+                # un-settled order cannot be spent twice.
+                "ALTER TABLE sleeve_orders ADD COLUMN status TEXT",
+                "ALTER TABLE sleeve_orders ADD COLUMN est_base REAL",
+                "ALTER TABLE sleeve_orders ADD COLUMN filled_quantity INTEGER",
+                "ALTER TABLE sleeve_orders ADD COLUMN settled_at TEXT",
+                # Rows written before that change have no status. They predate
+                # any settlement hook, so call them SUBMITTED and let the
+                # startup reconcile decide what really happened.
+                "UPDATE sleeve_orders SET status = 'SUBMITTED' WHERE status IS NULL",
             ]:
                 try:
                     conn.execute(migration_sql)
@@ -896,12 +915,25 @@ class Database:
         state = self.get_sleeve_month(month)
         return bool(state and state.get("status") not in (None, "", "signal_failed"))
 
+    SLEEVE_TERMINAL_STATUSES = ("FILLED", "CANCELLED", "REJECTED")
+
     def sleeve_orders_today(self) -> int:
-        """Sleeve orders placed today (UTC). Guards the daily funding hook, which runs every loop."""
+        """Sleeve orders placed today (UTC) that IBKR did not reject.
+
+        Guards the daily funding hook, which runs every loop pass: IBKR's account summary is a
+        lagging cache, so two orders in quick succession would both size off the same stale settled
+        cash figure. A REJECTED order never reached the book and consumed nothing, so it must not
+        cost the rest of the day — `_fund_target` caps the retry below the rejected quantity, which
+        is what stops that turning into a loop.
+        """
         conn = self._get_connection()
         try:
             row = conn.execute(
-                "SELECT COUNT(*) FROM sleeve_orders WHERE date(created_at) = date('now')"
+                """
+                SELECT COUNT(*) FROM sleeve_orders
+                WHERE date(created_at) = date('now')
+                  AND COALESCE(status, 'SUBMITTED') NOT IN ('REJECTED', 'CANCELLED')
+                """
             ).fetchone()
             return int(row[0]) if row else 0
         except Exception:
@@ -909,18 +941,131 @@ class Database:
         finally:
             conn.close()
 
+    def sleeve_min_rejected_qty_today(self, symbol: str):
+        """Smallest quantity IBKR rejected for `symbol` today, or None.
+
+        The next attempt must be strictly smaller than this, so repeated rejections shrink the order
+        and the retry provably terminates instead of re-placing the same doomed size every 90s.
+        """
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT MIN(quantity) FROM sleeve_orders
+                WHERE date(created_at) = date('now') AND symbol = ?
+                  AND action = 'BUY' AND status = 'REJECTED'
+                """,
+                (symbol,),
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+        except Exception:
+            return None
+        finally:
+            conn.close()
+
+    def sleeve_committed_base(self) -> float:
+        """Base-currency cost reserved by sleeve BUYs that have not settled yet.
+
+        An order IBKR has accepted but not yet reported on is money already spoken for. Netting it
+        off the reserve is what stops a second order being sized as though the first never happened
+        — the failure that would otherwise breach the ring-fence if a settlement event went missing.
+        """
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(est_base), 0) FROM sleeve_orders
+                WHERE action = 'BUY' AND COALESCE(status, 'SUBMITTED') = 'SUBMITTED'
+                """
+            ).fetchone()
+            return float(row[0]) if row and row[0] is not None else 0.0
+        except Exception:
+            return 0.0
+        finally:
+            conn.close()
+
+    def sleeve_unsettled_orders(self) -> list:
+        """Sleeve orders still waiting on IBKR, oldest first."""
+        conn = self._get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, month, action, symbol, quantity, order_id, est_base, created_at
+                FROM sleeve_orders
+                WHERE COALESCE(status, 'SUBMITTED') = 'SUBMITTED'
+                ORDER BY id
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+        finally:
+            conn.close()
+
     def record_sleeve_order(self, month: str, action: str, symbol: str, quantity: int,
-                            order_id=None, fill_price=None):
+                            order_id=None, fill_price=None, est_base=None, status="SUBMITTED"):
+        """Write the placement row. It is NOT evidence the order executed — see `settle_sleeve_order`."""
         conn = self._get_connection()
         try:
             conn.execute(
                 """
-                INSERT INTO sleeve_orders (month, action, symbol, quantity, order_id, fill_price)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO sleeve_orders
+                    (month, action, symbol, quantity, order_id, fill_price, est_base, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (month, action, symbol, int(quantity), order_id, fill_price),
+                (month, action, symbol, int(quantity), order_id, fill_price,
+                 float(est_base) if est_base is not None else None, status),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def settle_sleeve_order(self, order_id, status: str, fill_price=None, filled_quantity=None):
+        """Move a placement row to a terminal status. Returns the settled row, or None.
+
+        Only a row still SUBMITTED settles, so IBKR re-sending an orderStatus, a commission report
+        arriving per partial fill, and a completed-order replay after a restart are all no-ops
+        beyond the first. Returning the row (rather than a count) is what lets the caller apply the
+        reserve movement exactly once.
+        """
+        if status not in self.SLEEVE_TERMINAL_STATUSES:
+            raise ValueError(f"not a terminal sleeve status: {status!r}")
+        if order_id is None:
+            return None
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, month, action, symbol, quantity, order_id, est_base, created_at
+                FROM sleeve_orders
+                WHERE order_id = ? AND COALESCE(status, 'SUBMITTED') = 'SUBMITTED'
+                """,
+                (int(order_id),),
+            ).fetchone()
+            if row is None:
+                return None
+            qty = int(filled_quantity) if filled_quantity else 0
+            cur = conn.execute(
+                """
+                UPDATE sleeve_orders
+                SET status = ?,
+                    fill_price = CASE WHEN ? > 0 THEN ? ELSE fill_price END,
+                    filled_quantity = ?,
+                    settled_at = ?
+                WHERE id = ? AND COALESCE(status, 'SUBMITTED') = 'SUBMITTED'
+                """,
+                (status, float(fill_price or 0.0), float(fill_price or 0.0), qty,
+                 datetime.now().isoformat(), int(row["id"])),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+            out = dict(row)
+            out.update(status=status, fill_price=fill_price, filled_quantity=qty)
+            return out
+        except Exception as e:
+            logger.warning(f"Could not settle sleeve order {order_id}: {e}")
+            return None
         finally:
             conn.close()
 

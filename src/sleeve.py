@@ -175,9 +175,27 @@ class SleeveStrategy:
             return 0
         return int(max(0.0, budget_base) / unit)
 
+    def _committed(self) -> float:
+        """Base-currency cost of sleeve BUYs IBKR has accepted but not yet reported on."""
+        try:
+            return float(self.db.sleeve_committed_base())
+        except Exception as e:
+            logger.warning(f"Sleeve: could not read committed cash, assuming 0: {e}")
+            return 0.0
+
+    def _uncommitted_reserve(self) -> float:
+        """What is left of the reserve once orders already in flight are taken off it.
+
+        The reserve only falls when an order settles, which can be minutes after placement (the
+        2026-09-22 rejection took 4m38s) or later still if the bot restarts in between. Until then
+        the money is spoken for, and sizing a second order as though it were not is how the
+        ring-fence would be breached.
+        """
+        return max(0.0, self.reserve() - self._committed())
+
     def _spendable(self) -> float:
-        """The sleeve can spend the lesser of its reserve and the account's settled cash."""
-        reserve = self.reserve()
+        """The sleeve can spend the lesser of its uncommitted reserve and the account's settled cash."""
+        reserve = self._uncommitted_reserve()
         try:
             summary = self.connection.get_account_summary() or {}
             raw = (summary.get("AvailableFunds") or {}).get("value")
@@ -195,9 +213,11 @@ class SleeveStrategy:
         worth `min_topup_base`, unless it essentially finishes funding (>=85% of what is left), and is
         never placed below `min_order_base`.
 
-        Returns {"status": ...}; never raises.
+        Returns {"status": "placed" | "pending_cash" | "buy_failed", ...}; never raises. "placed"
+        means IBKR accepted the submission, NOT that it executed — the reserve moves only when
+        `on_order_settled` hears what became of it.
         """
-        reserve = self.reserve()
+        reserve = self._uncommitted_reserve()
         spendable = self._spendable()
         # The daily hook asks on every loop pass, but settled cash only moves when proceeds settle. Two
         # cases defer whatever the share price is, so they are decided before fetching one:
@@ -217,6 +237,16 @@ class SleeveStrategy:
             )
         unit = self._unit_base(target)
         qty = self._affordable(target, spendable, unit)
+        # IBKR rejects an oversized order outright rather than trimming it, so a retry at the same
+        # size would be rejected again on the same settled-cash figure. Staying strictly below the
+        # smallest quantity it refused today makes the retry converge instead of looping.
+        rejected_qty = self._rejected_qty_today(target)
+        if rejected_qty is not None and qty >= rejected_qty:
+            logger.info(
+                f"Sleeve: IBKR rejected {rejected_qty} {target} earlier today — "
+                f"trimming this attempt from {qty} to {rejected_qty - 1}"
+            )
+            qty = rejected_qty - 1
         if qty < 1:
             return self._defer(
                 target, ("shares", round(spendable), round(reserve)),
@@ -240,19 +270,26 @@ class SleeveStrategy:
         if not res.success:
             logger.error(f"Sleeve: BUY {target} failed: {res.message}")
             return out
-        cost = (res.fill_price or 0) * (res.filled_quantity or qty)
-        self.db.record_sleeve_order(month, "BUY", target, qty, res.order_id, res.fill_price)
-        left = self.reserve()
-        if cost:
-            left = self.db.add_sleeve_reserve(-self._to_base(target, cost))
-            logger.info(f"Sleeve: bought {qty} {target}; {left:,.0f} base still to invest")
-        out["status"] = "traded"
-        self._notify(
-            f"Bought <b>{qty} {target}</b>" + (f" @ {res.fill_price:,.2f}" if res.fill_price else ""),
-            [f"{left:,.0f} of {self.config.capital_base:,.0f} still to invest"
-             if left >= self.config.min_order_base else "Fully invested."],
+        # `place_market_order` returns as soon as IBKR accepts the submission: it carries no fill
+        # price and no filled quantity, and the order can still be rejected minutes later. So the
+        # row is written as SUBMITTED with the cost it reserves, and the reserve itself only moves
+        # in `on_order_settled`, once IBKR has said what actually happened.
+        self.db.record_sleeve_order(month, "BUY", target, qty, res.order_id,
+                                    fill_price=None, est_base=value, status="SUBMITTED")
+        logger.info(
+            f"Sleeve: placed BUY {qty} {target} (orderId={res.order_id}), "
+            f"{value:,.0f} base reserved pending the fill"
         )
+        out["status"] = "placed"
         return out
+
+    def _rejected_qty_today(self, symbol: str):
+        """Smallest quantity IBKR rejected for `symbol` today, or None."""
+        try:
+            return self.db.sleeve_min_rejected_qty_today(symbol)
+        except Exception as e:
+            logger.warning(f"Sleeve: could not read today's rejections: {e}")
+            return None
 
     def _defer(self, target: str, key: tuple, message: str) -> dict:
         """Log a funding deferral, then report it as pending cash.
@@ -310,10 +347,12 @@ class SleeveStrategy:
             out["orders"].append({"action": "SELL", "symbol": symbol, "quantity": int(qty),
                                   "ok": bool(res.success), "order_id": res.order_id, "message": res.message})
             if res.success:
-                proceeds = (res.fill_price or 0) * (res.filled_quantity or 0)
-                self.db.record_sleeve_order(month, "SELL", symbol, int(qty), res.order_id, res.fill_price)
-                if proceeds:
-                    self.db.add_sleeve_reserve(self._to_base(symbol, proceeds))
+                # Same rule as the BUY leg: placement is not execution. The proceeds are credited
+                # to the reserve in `on_order_settled`. Booking them here credited (fill_price or 0)
+                # x (filled_quantity or 0) == 0, so a switch would have sold the old line and left
+                # the reserve empty, and the sleeve would never have bought the new one.
+                self.db.record_sleeve_order(month, "SELL", symbol, int(qty), res.order_id,
+                                            fill_price=None, est_base=None, status="SUBMITTED")
             else:
                 logger.error(f"Sleeve: SELL {symbol} failed: {res.message}")
 
@@ -349,6 +388,10 @@ class SleeveStrategy:
         once the reserve is spent, nothing once a sleeve order has already gone in today (IBKR's
         account summary is a lagging cache, so two orders in quick succession would both size off the
         same stale settled-cash figure), and nothing for a month whose signal never resolved.
+
+        An order IBKR REJECTED does not count as having gone in — it reached no book and consumed
+        nothing, so it must not cost the rest of the day. `_fund_target` keeps that from looping by
+        sizing the next attempt strictly below whatever was refused.
         """
         out = {"status": "noop"}
         if not self.config.enabled:
@@ -372,10 +415,110 @@ class SleeveStrategy:
             logger.warning(f"Sleeve: could not count today's orders, skipping the retry: {e}")
             return out
         funded = self._fund_target(state["month"], target, retry=True)
-        if funded["status"] == "traded":
-            self.db.set_sleeve_month(state["month"], target, "traded")
-            out = {"status": "traded", "symbol": target, "quantity": funded["quantity"]}
+        if funded["status"] == "placed":
+            self.db.set_sleeve_month(state["month"], target, "placed")
+            out = {"status": "placed", "symbol": target, "quantity": funded["quantity"]}
         return out
+
+    # ------------------------------------------------------------------ settlement
+    def on_order_settled(self, order_id, status: str, fill_price=None,
+                         filled_quantity=None) -> dict:
+        """Apply IBKR's verdict on one sleeve order. Idempotent, and never raises.
+
+        This is the only place the reserve moves. It is driven by the order events the bot already
+        subscribes to (`orderStatusEvent` / `commissionReportEvent`), because placement tells us
+        nothing: on 2026-09-22 a BUY was accepted at 08:31:39 and rejected at 08:36:17, 4m38s later.
+        A short synchronous wait after `placeOrder` could not have caught that.
+
+        `settle_sleeve_order` only moves a row that is still SUBMITTED and hands it back, so IBKR
+        re-sending an orderStatus, one commission report per partial fill, and a completed-order
+        replay after a restart all collapse to a single reserve movement.
+        """
+        # Seed the reserve before anything moves it: add_sleeve_reserve() creates the row from
+        # whatever delta it is handed, so a SELL settling against a fresh database would seed the
+        # reserve at the sale proceeds instead of the capital base (the 2026-09-17 bug, reachable
+        # again now that proceeds land here rather than at placement).
+        self.reserve()
+        try:
+            row = self.db.settle_sleeve_order(order_id, status, fill_price, filled_quantity)
+        except Exception as e:
+            logger.warning(f"Sleeve: could not settle order {order_id}: {e}")
+            return {"status": "error"}
+        if row is None:
+            return {"status": "ignored"}     # not a sleeve order, or already settled
+
+        symbol, action = row["symbol"], row["action"]
+        qty = int(filled_quantity or row["quantity"] or 0)
+        px = float(fill_price or 0.0)
+
+        if status != "FILLED":
+            # Nothing reached the book, so nothing is owed. Dropping out of SUBMITTED releases the
+            # cash this order had reserved; the next pass sizes against the real figure again.
+            logger.warning(
+                f"Sleeve: {action} {row['quantity']} {symbol} (orderId={order_id}) {status} — "
+                f"reserve unchanged at {self.reserve():,.0f} base"
+            )
+            lines = ["Nothing was bought or sold; the reserve is unchanged."]
+            if status == "REJECTED":
+                lines.append("The next attempt will be sized smaller.")
+            self._notify(f"{action} <b>{row['quantity']} {symbol}</b> was {status.lower()}", lines)
+            return {"status": status.lower(), "symbol": symbol}
+
+        if px <= 0 or qty <= 0:
+            # A fill we cannot price. Charge the estimate rather than nothing: under-charging the
+            # reserve is what lets the sleeve overrun its ring-fence, and that is the worse error.
+            est = float(row["est_base"] or 0.0)
+            logger.warning(
+                f"Sleeve: {action} {symbol} (orderId={order_id}) filled but reported "
+                f"qty={qty} price={px} — falling back to the reserved estimate {est:,.0f} base"
+            )
+            delta = -est if action == "BUY" else 0.0
+        else:
+            delta_base = self._to_base(symbol, px * qty)
+            delta = -delta_base if action == "BUY" else delta_base
+
+        try:
+            left = self.db.add_sleeve_reserve(delta) if delta else self.reserve()
+        except Exception as e:
+            logger.error(f"Sleeve: reserve update failed for order {order_id}: {e}")
+            left = self.reserve()
+
+        verb = "bought" if action == "BUY" else "sold"
+        logger.info(
+            f"Sleeve: {verb} {qty} {symbol} @ {px:,.4f}; {left:,.0f} base still to invest"
+        )
+        if action == "BUY":
+            try:
+                self.db.set_sleeve_month(row["month"], symbol, "traded")
+            except Exception as e:
+                logger.warning(f"Sleeve: could not mark {row['month']} traded: {e}")
+        self._notify(
+            f"{verb.capitalize()} <b>{qty} {symbol}</b>" + (f" @ {px:,.2f}" if px else ""),
+            [f"{left:,.0f} of {self.config.capital_base:,.0f} still to invest"
+             if left >= self.config.min_order_base else "Fully invested."],
+        )
+        return {"status": "filled", "symbol": symbol, "quantity": qty, "reserve": left}
+
+    def report_unsettled(self) -> list:
+        """Log sleeve orders still waiting on IBKR from an earlier day.
+
+        Their cost stays reserved, so the sleeve under-spends rather than over-spends while one is
+        outstanding — but an order that never settles would quietly shrink the sleeve, so say so.
+        """
+        try:
+            rows = self.db.sleeve_unsettled_orders()
+        except Exception as e:
+            logger.warning(f"Sleeve: could not read unsettled orders: {e}")
+            return []
+        today = datetime.now().strftime("%Y-%m-%d")
+        stale = [r for r in rows if not str(r.get("created_at") or "").startswith(today)]
+        for r in stale:
+            logger.warning(
+                f"Sleeve: order {r.get('order_id')} ({r.get('action')} {r.get('quantity')} "
+                f"{r.get('symbol')}, placed {r.get('created_at')}) has never settled — "
+                f"{float(r.get('est_base') or 0):,.0f} base stays reserved against it"
+            )
+        return stale
 
     def _to_base(self, symbol: str, amount_local: float) -> float:
         from .contracts import CONTRACT_REGISTRY

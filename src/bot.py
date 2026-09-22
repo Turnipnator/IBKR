@@ -1307,6 +1307,13 @@ class TradingBot:
 
         Never raises — this runs inside ib_insync event handlers, and a ledger
         hiccup must not disturb order handling.
+
+        This is also where the forward-test sleeve learns what became of its
+        orders. Both handlers funnel through here, so it catches a fill, a
+        rejection minutes later, and a completed-order replay after a restart.
+        The sleeve's reserve moves nowhere else — placement carries no fill
+        price, so booking at placement never decremented it at all (the
+        ring-fence bug found 2026-09-22).
         """
         try:
             order_id = trade.order.orderId
@@ -1317,6 +1324,8 @@ class TradingBot:
             oid = getattr(getattr(trade, "order", None), "orderId", "?")
             logger.warning(f"Could not update trades ledger for order {oid}: {e}")
             return
+        finally:
+            self._settle_sleeve_order(trade, status, price)
         if changed:
             o = trade.order
             px = f" @ {float(price):.4f}" if price else ""
@@ -1326,6 +1335,26 @@ class TradingBot:
                 f"{int(float(o.totalQuantity))} {trade.contract.symbol} "
                 f"{o.orderType} -> {status}{px}{extra}"
             )
+
+    def _settle_sleeve_order(self, trade, status, price=None):
+        """Hand a terminal order to the sleeve. No-op unless it was a sleeve order.
+
+        `settle_sleeve_order` looks the orderId up and returns nothing for anything
+        else, so momentum orders fall straight through. Never raises: a sleeve
+        bookkeeping problem must not disturb the momentum order path.
+        """
+        sleeve = getattr(self, "sleeve", None)
+        if sleeve is None:
+            return
+        try:
+            filled = getattr(trade.orderStatus, "filled", 0) or 0
+            sleeve.on_order_settled(
+                trade.order.orderId, status,
+                fill_price=price, filled_quantity=int(float(filled)),
+            )
+        except Exception as e:
+            oid = getattr(getattr(trade, "order", None), "orderId", "?")
+            logger.warning(f"Sleeve settlement failed for order {oid}: {e}")
 
     def _register_fill_handlers(self):
         """Subscribe to ib_insync commissionReportEvent + orderStatusEvent (LIVE only).
@@ -1476,6 +1505,9 @@ class TradingBot:
                     f"hurdle {sleeve_config.hurdle_symbol}), monthly at "
                     f"{sleeve_config.hour}:{sleeve_config.minute:02d}"
                 )
+                # An order placed before a restart settles when IBKR replays it;
+                # one that never does keeps its cost reserved, so it must be visible.
+                self.sleeve.report_unsettled()
             except Exception as e:
                 logger.error(f"Sleeve setup failed, continuing without it: {e}")
                 self.sleeve = None

@@ -282,7 +282,13 @@ class SleeveConfig:
     bond_symbol: str = "IBTM"
     hurdle_symbol: str = "IB01"       # never held
     lookback_months: int = 12
-    cash_buffer: float = 0.02
+    # Headroom over the quoted price when sizing a tranche, matching the momentum path's
+    # `settled_cash_buffer`. IBKR needs more settled cash than price x quantity for a USD line
+    # bought out of GBP, and it rejects the whole order (Error 201) rather than trimming it.
+    # Measured need factor: 4.3-4.8% (2026-08-18, momentum) and 5.54% on 2026-09-22, when the
+    # sleeve's original 2% sized 9 VUAA at GBP 1,066.61 against GBP 1,055.66 available and was
+    # rejected. 6% would have bought 8 with GBP 106 to spare.
+    cash_buffer: float = 0.06
     hour: int = 14                    # 14:05 Europe/London, just after the momentum rebalance
     minute: int = 5
     # Funding tranches. The card says to buy "as settled cash allows, retrying at each later close
