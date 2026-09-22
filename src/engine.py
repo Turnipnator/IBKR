@@ -219,12 +219,27 @@ class DecisionEngine:
     # spend its cash, or treat its holdings as its own.
 
     def _sleeve_symbols(self) -> set:
-        """Symbols owned by the forward-test sleeve; empty when it is off."""
+        """Symbols owned by the forward-test sleeve; empty when it is off.
+
+        Falls back to the config when no sleeve instance is attached. The ring-fence must not
+        depend on construction order: `run_scheduled` reconciles protective stops BEFORE it builds
+        the sleeve, and `--once` never builds one at all. On 2026-09-22, the first day the sleeve
+        actually held anything, that gap put a 3xATR trailing stop on 8 VUAA within seconds of
+        startup — precisely what PREREG_9 section 3 says must never happen.
+        """
         sleeve = getattr(self, "sleeve", None)
         try:
-            return sleeve.symbols if sleeve and sleeve.config.enabled else set()
+            if sleeve is not None and sleeve.config.enabled:
+                return sleeve.symbols
         except Exception:
-            return set()
+            pass
+        try:
+            from .config import sleeve_config
+            if sleeve_config.enabled:
+                return {sleeve_config.equity_symbol, sleeve_config.bond_symbol}
+        except Exception:
+            pass
+        return set()
 
     def _sleeve_claim(self) -> float:
         """Sleeve positions + cash reserve, in base currency (0 when off)."""

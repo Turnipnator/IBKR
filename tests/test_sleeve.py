@@ -273,13 +273,14 @@ def test_sleeve_claim_failure_leaves_sizing_unadjusted():
     assert eng._sleeve_claim() == 0.0     # fails open, never blocks a rebalance
 
 
-def bot_with_sleeve(positions):
+def bot_with_sleeve(positions, stops=None):
     from src.bot import TradingBot
     bot = TradingBot.__new__(TradingBot)
     bot.dry_run = False
     bot.notifier = None
     bot.sleeve = SimpleNamespace(config=cfg(), symbols={"VUAA", "IBTM"})
     closed = []
+    cancelled = []
     bot.connection = SimpleNamespace(ensure_connected=lambda: True,
                                      ib=SimpleNamespace(openTrades=lambda: []))
     bot.engine = SimpleNamespace(
@@ -287,10 +288,15 @@ def bot_with_sleeve(positions):
             get_positions=lambda: list(positions),
             close_position=lambda symbol, reason=None: closed.append(symbol) or OrderResult(success=True),
         ),
-        order_manager=SimpleNamespace(cancel_all_orders=lambda: 0, get_open_orders=lambda: []),
+        order_manager=SimpleNamespace(
+            cancel_all_orders=lambda: 0, get_open_orders=lambda: [],
+            protective_stops_for=lambda symbol, action: list((stops or {}).get(symbol, [])),
+            cancel_order=lambda oid: cancelled.append(oid) or True,
+        ),
         _sleeve_symbols=lambda: {"VUAA", "IBTM"},
         state=SimpleNamespace(market_reason="HALT: 20.1% drawdown", market_ok=False),
     )
+    bot._cancelled_orders = cancelled
     return bot, closed
 
 
@@ -299,6 +305,45 @@ def test_stop_reconciliation_skips_sleeve_positions():
                             unrealized_pnl=0.0, realized_pnl=0.0)]
     bot, _ = bot_with_sleeve(sleeve_only)
     assert bot._reconcile_protective_stops() == 0      # nothing to protect: the sleeve carries no stops
+
+
+def test_a_stop_found_on_a_sleeve_symbol_is_cancelled():
+    """2026-09-22, the first day the sleeve held anything: the startup reconcile ran before the
+    sleeve object existed, `_sleeve_symbols()` came back empty, and a 3xATR trailing stop went
+    onto 8 VUAA (orderId 5996) seconds after boot. Skipping sleeve symbols is not enough — a stop
+    already resting on one has to come off, or it can take the sleeve out of its monthly
+    position."""
+    held = [Position(symbol="VUAA", quantity=8, avg_cost=150.11, market_value=1200.0,
+                     unrealized_pnl=0.0, realized_pnl=0.0)]
+    stray = SimpleNamespace(order=SimpleNamespace(orderId=5996))
+    bot, _ = bot_with_sleeve(held, stops={"VUAA": [stray]})
+    assert bot._reconcile_protective_stops() == 0
+    assert bot._cancelled_orders == [5996]
+
+
+def test_a_momentum_stop_is_never_cancelled_by_the_sleeve_sweep():
+    held = [Position(symbol="CMOD", quantity=52, avg_cost=35.0, market_value=1400.0,
+                     unrealized_pnl=0.0, realized_pnl=0.0)]
+    stop = SimpleNamespace(order=SimpleNamespace(orderId=5820))
+    bot, _ = bot_with_sleeve(held, stops={"CMOD": [stop]})
+    bot._cancel_sleeve_stops(bot.engine._sleeve_symbols(), held)
+    assert bot._cancelled_orders == []
+
+
+def test_the_ring_fence_does_not_depend_on_the_sleeve_object_existing():
+    """`run_scheduled` reconciles stops BEFORE it builds the sleeve, and `--once` never builds
+    one. The ring-fence has to hold on the config alone."""
+    from src.engine import DecisionEngine
+    from src.config import sleeve_config
+    eng = DecisionEngine.__new__(DecisionEngine)          # no `sleeve` attribute at all
+    was = sleeve_config.enabled
+    try:
+        sleeve_config.enabled = True
+        assert eng._sleeve_symbols() == {sleeve_config.equity_symbol, sleeve_config.bond_symbol}
+        sleeve_config.enabled = False
+        assert eng._sleeve_symbols() == set()
+    finally:
+        sleeve_config.enabled = was
 
 
 def test_drawdown_halt_leaves_the_sleeve_alone():

@@ -695,6 +695,34 @@ class TradingBot:
     def config_max_positions(self) -> int:
         return trading_config.max_open_positions
 
+    def _cancel_sleeve_stops(self, sleeve_syms, positions) -> int:
+        """Cancel any protective stop resting on a sleeve symbol. Never raises."""
+        if not sleeve_syms:
+            return 0
+        cancelled = 0
+        for pos in positions:
+            if pos.symbol not in sleeve_syms or pos.quantity == 0:
+                continue
+            action = "SELL" if pos.quantity > 0 else "BUY"
+            try:
+                stops = self.engine.order_manager.protective_stops_for(pos.symbol, action)
+            except Exception as e:
+                logger.warning(f"Could not read stops on sleeve symbol {pos.symbol}: {e}")
+                continue
+            for trade in stops:
+                order_id = getattr(trade.order, "orderId", None)
+                try:
+                    if self.engine.order_manager.cancel_order(order_id):
+                        cancelled += 1
+                        logger.warning(
+                            f"Cancelled protective stop {order_id} on sleeve symbol "
+                            f"{pos.symbol} — the sleeve trades on its monthly signal, not "
+                            f"stops (PREREG_9 §3)"
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not cancel stop {order_id} on {pos.symbol}: {e}")
+        return cancelled
+
     def _reconcile_protective_stops(self) -> int:
         """
         On startup, ensure every open live position has a working TRAIL/STP order.
@@ -710,12 +738,14 @@ class TradingBot:
         if not self.connection.ensure_connected():
             return 0
 
-        # Sleeve positions carry no stops by design (attempt 9 §3).
+        # Sleeve positions carry no stops by design (attempt 9 §3). That is an invariant to
+        # enforce, not merely a step to skip: a stop placed on a sleeve holding before this was
+        # fixed would otherwise sit on the book forever and could take the sleeve out of its
+        # monthly position, which is the one thing the forward test cannot survive.
         sleeve_syms = self.engine._sleeve_symbols()
-        positions = [
-            p for p in self.engine.position_manager.get_positions()
-            if p.symbol not in sleeve_syms
-        ]
+        all_positions = self.engine.position_manager.get_positions()
+        self._cancel_sleeve_stops(sleeve_syms, all_positions)
+        positions = [p for p in all_positions if p.symbol not in sleeve_syms]
         if not positions:
             return 0
 
