@@ -464,17 +464,19 @@ class SleeveStrategy:
             self._notify(f"{action} <b>{row['quantity']} {symbol}</b> was {status.lower()}", lines)
             return {"status": status.lower(), "symbol": symbol}
 
-        if px <= 0 or qty <= 0:
-            # A fill we cannot price. Charge the estimate rather than nothing: under-charging the
-            # reserve is what lets the sleeve overrun its ring-fence, and that is the worse error.
+        delta_base = self._to_base(symbol, px * qty) if (px > 0 and qty > 0) else None
+        if delta_base is None:
+            # A fill we cannot value — no price, no quantity, or no FX rate. Charge the reserved
+            # estimate rather than nothing: under-charging is what lets the sleeve overrun its
+            # ring-fence, and that is the worse error. A SELL has no estimate, so it credits
+            # nothing until the figure can be trusted.
             est = float(row["est_base"] or 0.0)
-            logger.warning(
-                f"Sleeve: {action} {symbol} (orderId={order_id}) filled but reported "
-                f"qty={qty} price={px} — falling back to the reserved estimate {est:,.0f} base"
+            logger.error(
+                f"Sleeve: {action} {qty} {symbol} (orderId={order_id}) filled at {px} but could "
+                f"not be valued in base — using the reserved estimate {est:,.0f} base"
             )
             delta = -est if action == "BUY" else 0.0
         else:
-            delta_base = self._to_base(symbol, px * qty)
             delta = -delta_base if action == "BUY" else delta_base
 
         try:
@@ -520,13 +522,22 @@ class SleeveStrategy:
             )
         return stale
 
-    def _to_base(self, symbol: str, amount_local: float) -> float:
+    def _to_base(self, symbol: str, amount_local: float):
+        """Convert an instrument-currency amount to account base. None if the rate is unknown.
+
+        Deliberately NOT falling back to 1.0. For a USD line in a GBP account that is a 34% error
+        in the direction that under-charges the reserve, which is the one failure the ring-fence
+        cannot absorb — and it is silent. Callers charge the reserved estimate instead.
+        """
         from .contracts import CONTRACT_REGISTRY
         ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
         if ccy == "GBP":
             return float(amount_local)
         fx = self.connection.get_fx_rates() or {}
-        rate = 0.01 * fx.get("GBP", 1.0) if ccy == "GBX" else fx.get(ccy, 1.0)
+        rate = 0.01 * fx.get("GBP") if ccy == "GBX" and fx.get("GBP") else fx.get(ccy)
+        if not rate or rate <= 0:
+            logger.error(f"Sleeve: no {ccy} FX rate available — cannot value {symbol} in base")
+            return None
         return float(amount_local) * rate
 
 

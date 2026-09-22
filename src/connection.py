@@ -43,6 +43,7 @@ class ConnectionManager:
         self._on_connect_callbacks: list[Callable] = []
         self._on_disconnect_callbacks: list[Callable] = []
         self._on_reconnect_failed_callbacks: list[Callable] = []
+        self._fx_cache: dict[str, float] = {}   # last non-empty get_fx_rates() result
 
         # Set up disconnect handler
         self.ib.disconnectedEvent += self._on_disconnect
@@ -217,12 +218,26 @@ class ConnectionManager:
 
         The base currency itself always has rate 1.0. Returns an empty dict
         on connection failure; callers should fall back to 1.0 in that case.
+
+        Reads `accountValues()`, not `accountSummary()`. They carry the same
+        ExchangeRate rows, but `accountSummary()` re-requests on demand when
+        ib_insync's cache is empty, and that request runs the event loop — which
+        raises "This event loop is already running" when called from inside an
+        ib_insync event handler. That is exactly where the sleeve settles its
+        orders, and on 2026-09-22 it turned a USD fill into an unconverted GBP
+        charge: {} came back, every caller fell back to rate 1.0, and the
+        sleeve's reserve was debited $1,200.88 as if it were £1,200.88.
+
+        `accountValues()` is served from the standing account-update
+        subscription, so it never issues a request. The last non-empty result is
+        also cached, so a momentary gap returns stale rates rather than none —
+        a slightly old rate is a rounding error, a missing one is a 34% error.
         """
         if not self.ensure_connected():
-            return {}
+            return dict(self._fx_cache)
         rates: dict[str, float] = {}
         try:
-            for av in self.ib.accountSummary():
+            for av in self.ib.accountValues():
                 if av.tag != "ExchangeRate":
                     continue
                 if av.currency in ("", "BASE"):
@@ -233,7 +248,14 @@ class ConnectionManager:
                     continue
         except Exception as e:
             logger.warning(f"Failed to fetch FX rates: {e}")
-        return rates
+        if rates:
+            self._fx_cache = dict(rates)
+            return rates
+        if self._fx_cache:
+            logger.warning(
+                f"FX rates unavailable, reusing the last known set: {self._fx_cache}"
+            )
+        return dict(self._fx_cache)
 
     def get_account_summary(self) -> dict:
         """Get account summary as a dictionary.

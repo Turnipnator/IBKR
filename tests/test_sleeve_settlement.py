@@ -26,6 +26,7 @@ import pytest
 
 from src.bot import TradingBot
 from src.config import SleeveConfig
+from src.connection import ConnectionManager
 from src.database import Database
 from src.orders import OrderAction, OrderResult
 from src.sleeve import SleeveStrategy
@@ -375,6 +376,81 @@ class TestUnsettledVisibility:
         s, orders, db = _sleeve(tmp_path, available=5000.0)
         s.retry_pending()
         assert s.report_unsettled() == []
+
+
+# ================================================================ 8. FX inside an event handler
+class TestFxInsideEventHandlers:
+    """The settlement path runs inside an ib_insync event handler, and `ib.accountSummary()`
+    re-requests on demand when its cache is empty — a request that runs the event loop and raises
+    "This event loop is already running" from in there. On 2026-09-22 that returned {} and every
+    caller fell back to rate 1.0, so a $1,200.88 VUAA fill was charged to the reserve as £1,200.88
+    instead of £897. `accountValues()` carries the same rows from the standing subscription."""
+
+    @staticmethod
+    def _cm(values, summary_raises=True):
+        cm = ConnectionManager.__new__(ConnectionManager)
+        cm._fx_cache = {}
+
+        def _summary():
+            if summary_raises:
+                raise RuntimeError("This event loop is already running")
+            return values
+
+        cm.ib = SimpleNamespace(accountValues=lambda: values, accountSummary=_summary)
+        cm.ensure_connected = lambda: True
+        return cm
+
+    @staticmethod
+    def _av(tag, currency, value):
+        return SimpleNamespace(tag=tag, currency=currency, value=value)
+
+    def test_rates_come_from_account_values_not_account_summary(self):
+        cm = self._cm([
+            self._av("ExchangeRate", "USD", "0.7467"),
+            self._av("ExchangeRate", "GBP", "1.00"),
+            self._av("ExchangeRate", "BASE", "1.00"),
+            self._av("NetLiquidation", "GBP", "4661.44"),
+        ])
+        assert cm.get_fx_rates() == {"USD": 0.7467, "GBP": 1.0}   # BASE dropped, no exception
+
+    def test_a_momentary_gap_reuses_the_last_known_rates(self):
+        cm = self._cm([self._av("ExchangeRate", "USD", "0.7467")])
+        assert cm.get_fx_rates() == {"USD": 0.7467}
+        cm.ib.accountValues = lambda: []
+        assert cm.get_fx_rates() == {"USD": 0.7467}, "a stale rate beats no rate"
+
+    def test_no_rates_at_all_returns_empty_not_a_wrong_one(self):
+        cm = self._cm([])
+        assert cm.get_fx_rates() == {}
+
+
+class TestMissingFxNeverSilentlyMisvalues:
+    def test_to_base_returns_none_rather_than_rate_one(self, tmp_path):
+        s, _, _ = _sleeve(tmp_path)
+        s.connection.get_fx_rates = lambda: {}
+        assert s._to_base("VUAA", 1200.8832) is None
+        assert s._to_base("IBTM", 2480.0) == pytest.approx(2480.0)    # GBP line needs no rate
+
+    def test_a_fill_with_no_fx_charges_the_estimate_not_the_raw_amount(self, tmp_path):
+        """Replays the live 2026-09-22 09:17:12 settlement: 8 VUAA @ $150.1104 with FX empty."""
+        s, orders, db = _sleeve(tmp_path, available=5000.0)
+        s.retry_pending()
+        est = db.sleeve_committed_base()
+        s.connection.get_fx_rates = lambda: {}                        # the event-handler failure
+        qty = orders.placed[0][2]
+        s.on_order_settled(_order_id(db), "FILLED", fill_price=VUAA_USD, filled_quantity=qty)
+
+        charged = 2500.0 - db.get_sleeve_reserve(2500.0)
+        assert charged == pytest.approx(est)                          # the estimate
+        assert charged != pytest.approx(qty * VUAA_USD)               # NOT the unconverted USD
+
+    def test_a_fill_with_fx_available_charges_the_real_converted_cost(self, tmp_path):
+        s, orders, db = _sleeve(tmp_path, available=5000.0)
+        s.retry_pending()
+        qty = orders.placed[0][2]
+        s.on_order_settled(_order_id(db), "FILLED", fill_price=VUAA_USD, filled_quantity=qty)
+        charged = 2500.0 - db.get_sleeve_reserve(2500.0)
+        assert charged == pytest.approx(qty * VUAA_USD * FX_USD)      # converted, no buffer
 
 
 def _clear_today(db):
