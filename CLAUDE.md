@@ -4,7 +4,7 @@ When asked to do research or strategy analysis, first read RESEARCH.md and follo
 
 ## Before implementing — project overrides
 
-The shared pre-flight protocol lives in `~/trading-bot-skill.md` ("Before Implementing"). Two overrides for this repo:
+The shared pre-flight protocol lives in `~/trading-bot-skill.md` ("Before Implementing"). Three overrides for this repo:
 
 1. **Compose/container changes are never "just do it" here.** Recreating the wrong container has operational side effects (gateway login state). Read the deployment notes in `CLAUDE.local.md` before touching `docker-compose.yml`, `.env` handling, or restart behaviour.
 
@@ -13,6 +13,8 @@ The shared pre-flight protocol lives in `~/trading-bot-skill.md` ("Before Implem
    - A read-only broker probe (separate clientId, `readonly=True`) when the claim is about live state
    - Deploy via bot-only rebuild (see `CLAUDE.local.md`), then verify: Order-parity OK, NLV drift <1%, session P&L vs daily cap
    - Back up `data/trading.db` before any change that writes to it
+
+3. **No placeholders in live code.** Never leave a stub, a hardcoded return, a bare `pass`, or a TODO where real behaviour is expected. Implement it, or raise so the gap is loud. The scalping-era `is_symbol_in_cooldown` stub returned "not in cooldown" for months while the bot re-bought names it had just stopped out of.
 
 ---
 
