@@ -1530,7 +1530,7 @@ class TradingBot:
                 )
                 self.engine.sleeve = self.sleeve
                 logger.info(
-                    f"Sleeve enabled: {sleeve_config.capital_base:,.0f} base "
+                    f"Sleeve enabled: {self.sleeve._money(sleeve_config.capital_base)} "
                     f"({sleeve_config.equity_symbol}/{sleeve_config.bond_symbol}, "
                     f"hurdle {sleeve_config.hurdle_symbol}), monthly at "
                     f"{sleeve_config.hour}:{sleeve_config.minute:02d}"
