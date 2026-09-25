@@ -561,7 +561,11 @@ class DecisionEngine:
         sleeve_claim = self._sleeve_claim()
         if sleeve_claim > 0:
             sizing_capital = max(0.0, sizing_capital - sleeve_claim)
-            logger.info(f"Sleeve ring-fence: {sleeve_claim:,.2f} excluded from sizing capital")
+            base_code = self._base_currency()
+            logger.info(
+                f"Sleeve ring-fence: {currency_symbol(base_code) if base_code else ''}{sleeve_claim:,.2f} "
+                f"excluded from sizing capital"
+            )
         if net_liq <= 0 or sizing_capital <= 0:
             logger.error("Cannot get portfolio value")
             return []

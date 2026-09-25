@@ -44,6 +44,7 @@ class ConnectionManager:
         self._on_disconnect_callbacks: list[Callable] = []
         self._on_reconnect_failed_callbacks: list[Callable] = []
         self._fx_cache: dict[str, float] = {}   # last non-empty get_fx_rates() result
+        self._base_ccy: str = ""                 # account base currency, see get_base_currency()
 
         # Set up disconnect handler
         self.ib.disconnectedEvent += self._on_disconnect
@@ -256,6 +257,26 @@ class ConnectionManager:
                 f"FX rates unavailable, reusing the last known set: {self._fx_cache}"
             )
         return dict(self._fx_cache)
+
+    def get_base_currency(self) -> str:
+        """The account's base currency code (e.g. "GBP"), or "" if it cannot be read.
+
+        Read from the NetLiquidation row of `accountValues()` for the same reason as
+        `get_fx_rates`: it is safe inside an ib_insync event handler, where the sleeve settles.
+        The base currency never changes for an account, so the first answer is kept.
+        """
+        if self._base_ccy:
+            return self._base_ccy
+        if not self.ensure_connected():
+            return ""
+        try:
+            for av in self.ib.accountValues():
+                if av.tag == "NetLiquidation" and av.currency not in ("", "BASE"):
+                    self._base_ccy = av.currency
+                    break
+        except Exception as e:
+            logger.warning(f"Failed to read the account base currency: {e}")
+        return self._base_ccy
 
     def get_account_summary(self) -> dict:
         """Get account summary as a dictionary.

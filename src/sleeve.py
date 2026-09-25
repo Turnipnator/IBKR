@@ -27,7 +27,7 @@ from typing import Optional
 
 import pandas as pd
 
-from .config import sleeve_config
+from .config import currency_symbol, sleeve_config
 from .orders import OrderAction
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,22 @@ class SleeveStrategy:
     def month_key(self, now: Optional[datetime] = None) -> str:
         return (now or datetime.now()).strftime("%Y-%m")
 
+    def _money(self, amount: float) -> str:
+        """An amount in account base currency for logs and Telegram: "£1,554" (or "1,554 base"
+        when the base currency cannot be read, rather than a guessed symbol)."""
+        get = getattr(self.connection, "get_base_currency", None)
+        try:
+            code = get() if get else ""
+        except Exception:
+            code = ""
+        return f"{currency_symbol(code)}{amount:,.0f}" if code else f"{amount:,.0f} base"
+
+    def _price(self, symbol: str, px: float) -> str:
+        """A share price in the instrument's own currency: "$150.35", or "1,865p" for GBX lines."""
+        from .contracts import CONTRACT_REGISTRY
+        ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
+        return f"{px:,.2f}p" if ccy == "GBX" else f"{currency_symbol(ccy)}{px:,.2f}"
+
     def positions(self) -> dict:
         """Sleeve positions only: symbol -> quantity."""
         try:
@@ -85,26 +101,37 @@ class SleeveStrategy:
             return 0.0
 
     def market_value(self) -> float:
-        """Market value of sleeve positions in base currency (0 if unavailable)."""
-        try:
-            fx = self.connection.get_fx_rates() or {}
-            total = 0.0
-            for p in self.position_manager.get_positions():
-                if p.symbol not in self.symbols or p.quantity == 0:
-                    continue
-                if p.market_value:
-                    total += float(p.market_value)
-                    continue
+        """Market value of sleeve positions in account base currency.
+
+        IBKR's portfolio `marketValue` is in the instrument's own currency — VUAA's is dollars — so it
+        is converted here. Before 2026-09-25 it was not: the ring-fence on 09-24 read 3,250 for a
+        sleeve worth about 2,490 in pounds, because $3,117 of VUAA was added to the pound reserve as
+        if it were pounds.
+
+        Raises rather than guessing when a holding cannot be valued (no price, or no FX rate): a
+        silent 0 or an assumed rate of 1.0 would move the ring-fence by a third with nothing in the
+        log. The engine catches the error and says so.
+        """
+        from .contracts import CONTRACT_REGISTRY
+        total = 0.0
+        for p in self.position_manager.get_positions():
+            if p.symbol not in self.symbols or p.quantity == 0:
+                continue
+            ccy = CONTRACT_REGISTRY.get(p.symbol, ("USD", "LSEETF"))[0]
+            # A pence-quoted (GBX) line is valued from its price, which _to_base knows is in pence;
+            # every other line uses IBKR's own marketValue, in the contract currency.
+            if p.market_value and ccy != "GBX":
+                local = float(p.market_value)
+            else:
                 price = (self.fetcher.get_latest_prices([p.symbol]) or {}).get(p.symbol)
-                if price:
-                    from .contracts import CONTRACT_REGISTRY
-                    ccy = CONTRACT_REGISTRY.get(p.symbol, ("USD", "LSEETF"))[0]
-                    rate = 1.0 if ccy == "GBP" else fx.get(ccy, 1.0)
-                    total += p.quantity * float(price) * rate
-            return total
-        except Exception as e:
-            logger.warning(f"Sleeve: could not value positions: {e}")
-            return 0.0
+                if not price:
+                    raise RuntimeError(f"no price for sleeve holding {p.symbol}")
+                local = p.quantity * float(price)
+            base = self._to_base(p.symbol, local)
+            if base is None:
+                raise RuntimeError(f"no FX rate to value sleeve holding {p.symbol}")
+            total += base
+        return total
 
     def claim_on_account(self) -> float:
         """What the momentum strategy must exclude: sleeve positions + sleeve cash reserve."""
@@ -157,12 +184,12 @@ class SleeveStrategy:
         price = (self.fetcher.get_latest_prices([symbol]) or {}).get(symbol)
         if not price or price <= 0:
             return 0.0
-        from .contracts import CONTRACT_REGISTRY
-        ccy = CONTRACT_REGISTRY.get(symbol, ("USD", "LSEETF"))[0]
-        fx = self.connection.get_fx_rates() or {}
-        rate = 0.01 * fx.get("GBP", 1.0) if ccy == "GBX" else (1.0 if ccy == "GBP" else fx.get(ccy, 1.0))
-        unit = float(price) * rate * (1.0 + self.config.cash_buffer)
-        return unit if unit > 0 else 0.0
+        # No FX rate means no price in base: 0 defers the buy, where an assumed rate of 1.0 would
+        # size a USD line a third too big and have IBKR reject it.
+        base = self._to_base(symbol, float(price))
+        if not base or base <= 0:
+            return 0.0
+        return base * (1.0 + self.config.cash_buffer)
 
     def _affordable(self, symbol: str, budget_base: float, unit: Optional[float] = None) -> int:
         """Whole shares of `symbol` that `budget_base` covers, keeping the cash buffer.
@@ -227,12 +254,12 @@ class SleeveStrategy:
         #    under twice the spendable cash.
         below_floor = spendable < self.config.min_order_base
         if below_floor or (spendable < self.config.min_topup_base and reserve >= 2 * spendable):
-            why = (f"below the {self.config.min_order_base:,.0f} order floor" if below_floor else
-                   f"below the {self.config.min_topup_base:,.0f} minimum and cannot be the last tranche")
+            why = (f"below the {self._money(self.config.min_order_base)} order floor" if below_floor else
+                   f"below the {self._money(self.config.min_topup_base)} minimum and cannot be the last tranche")
             return self._defer(
                 target, ("cash", round(spendable), round(reserve)),
-                f"Sleeve: {target} buy deferred — {spendable:,.0f} base of settled cash against "
-                f"{reserve:,.0f} still to invest is {why}, waiting for more settled cash rather than "
+                f"Sleeve: {target} buy deferred — {self._money(spendable)} of settled cash against "
+                f"{self._money(reserve)} still to invest is {why}, waiting for more settled cash rather than "
                 "paying a flat commission on a small order"
             )
         unit = self._unit_base(target)
@@ -250,7 +277,7 @@ class SleeveStrategy:
         if qty < 1:
             return self._defer(
                 target, ("shares", round(spendable), round(reserve)),
-                f"Sleeve: {target} buy deferred — reserve {reserve:,.0f} and settled cash cover 0 shares; "
+                f"Sleeve: {target} buy deferred — reserve {self._money(reserve)} and settled cash cover 0 shares; "
                 "will retry at the next close"
             )
         value = qty * unit
@@ -258,8 +285,8 @@ class SleeveStrategy:
         if (value < self.config.min_topup_base and not finishes) or value < self.config.min_order_base:
             return self._defer(
                 target, ("tranche", round(value), round(reserve)),
-                f"Sleeve: {target} tranche would be {value:,.0f} base of {reserve:,.0f} still to invest "
-                f"— below the {self.config.min_topup_base:,.0f} minimum and not the last tranche, waiting "
+                f"Sleeve: {target} tranche would be {self._money(value)} of {self._money(reserve)} still to invest "
+                f"— below the {self._money(self.config.min_topup_base)} minimum and not the last tranche, waiting "
                 "for more settled cash "
                 "rather than paying a flat commission on a small order"
             )
@@ -278,7 +305,7 @@ class SleeveStrategy:
                                     fill_price=None, est_base=value, status="SUBMITTED")
         logger.info(
             f"Sleeve: placed BUY {qty} {target} (orderId={res.order_id}), "
-            f"{value:,.0f} base reserved pending the fill"
+            f"{self._money(value)} reserved pending the fill"
         )
         out["status"] = "placed"
         return out
@@ -456,7 +483,7 @@ class SleeveStrategy:
             # cash this order had reserved; the next pass sizes against the real figure again.
             logger.warning(
                 f"Sleeve: {action} {row['quantity']} {symbol} (orderId={order_id}) {status} — "
-                f"reserve unchanged at {self.reserve():,.0f} base"
+                f"reserve unchanged at {self._money(self.reserve())}"
             )
             lines = ["Nothing was bought or sold; the reserve is unchanged."]
             if status == "REJECTED":
@@ -473,7 +500,7 @@ class SleeveStrategy:
             est = float(row["est_base"] or 0.0)
             logger.error(
                 f"Sleeve: {action} {qty} {symbol} (orderId={order_id}) filled at {px} but could "
-                f"not be valued in base — using the reserved estimate {est:,.0f} base"
+                f"not be valued in base — using the reserved estimate {self._money(est)}"
             )
             delta = -est if action == "BUY" else 0.0
         else:
@@ -487,7 +514,9 @@ class SleeveStrategy:
 
         verb = "bought" if action == "BUY" else "sold"
         logger.info(
-            f"Sleeve: {verb} {qty} {symbol} @ {px:,.4f}; {left:,.0f} base still to invest"
+            f"Sleeve: {verb} {qty} {symbol} @ {px:,.4f}"
+            + (f" ({self._money(delta_base)})" if delta_base is not None else "")
+            + f"; {self._money(left)} still to invest"
         )
         if action == "BUY":
             try:
@@ -495,9 +524,12 @@ class SleeveStrategy:
             except Exception as e:
                 logger.warning(f"Sleeve: could not mark {row['month']} traded: {e}")
         self._notify(
-            f"{verb.capitalize()} <b>{qty} {symbol}</b>" + (f" @ {px:,.2f}" if px else ""),
-            [f"{left:,.0f} of {self.config.capital_base:,.0f} still to invest"
-             if left >= self.config.min_order_base else "Fully invested."],
+            f"{verb.capitalize()} <b>{qty} {symbol}</b>" + (f" @ {self._price(symbol, px)}" if px else "")
+            + (f" = {self._money(delta_base)}" if delta_base is not None else ""),
+            [f"{self._money(left)} of {self._money(self.config.capital_base)} still to invest"
+             if left >= self.config.min_order_base else
+             f"Fully invested — {self._money(left)} stays in cash, below the "
+             f"{self._money(self.config.min_order_base)} minimum order."],
         )
         return {"status": "filled", "symbol": symbol, "quantity": qty, "reserve": left}
 
@@ -518,7 +550,7 @@ class SleeveStrategy:
             logger.warning(
                 f"Sleeve: order {r.get('order_id')} ({r.get('action')} {r.get('quantity')} "
                 f"{r.get('symbol')}, placed {r.get('created_at')}) has never settled — "
-                f"{float(r.get('est_base') or 0):,.0f} base stays reserved against it"
+                f"{self._money(float(r.get('est_base') or 0))} stays reserved against it"
             )
         return stale
 
