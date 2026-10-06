@@ -846,18 +846,43 @@ class Database:
     # ==================== Forward-test sleeve (attempt 9) ====================
 
     def get_sleeve_reserve(self, capital_base: float) -> float:
-        """The sleeve's claim on account cash. Seeds itself with capital_base on first use."""
+        """The sleeve's claim on account cash. Seeds itself with capital_base on first use.
+
+        When the owner changes SLEEVE_CAPITAL_BASE, the difference moves into (or out of) the
+        reserve exactly once: the stored capital_base is updated in the same transaction, so every
+        later read sees no difference. Before 2026-10-06 the reserve was seeded once and a new
+        capital base was silently ignored. A cut never sells anything — the reserve floors at 0
+        and the sleeve simply stops buying.
+        """
+        capital_base = float(capital_base)
         conn = self._get_connection()
         try:
-            row = conn.execute("SELECT reserve_base FROM sleeve_account WHERE id = 1").fetchone()
+            row = conn.execute(
+                "SELECT reserve_base, capital_base FROM sleeve_account WHERE id = 1"
+            ).fetchone()
             if row is None:
                 conn.execute(
                     "INSERT INTO sleeve_account (id, reserve_base, capital_base) VALUES (1, ?, ?)",
-                    (float(capital_base), float(capital_base)),
+                    (capital_base, capital_base),
                 )
                 conn.commit()
-                return float(capital_base)
-            return float(row[0])
+                return capital_base
+            reserve, stored = float(row[0]), float(row[1])
+            delta = capital_base - stored
+            if abs(delta) < 0.005:
+                return reserve
+            new = max(0.0, reserve + delta)
+            conn.execute(
+                "UPDATE sleeve_account SET reserve_base = ?, capital_base = ? WHERE id = 1",
+                (new, capital_base),
+            )
+            conn.commit()
+            logger.warning(
+                f"Sleeve capital base changed {stored:,.2f} -> {capital_base:,.2f}: "
+                f"reserve {reserve:,.2f} -> {new:,.2f}"
+                + ("" if delta > 0 else " (a cut sells nothing; the sleeve stops buying)")
+            )
+            return new
         finally:
             conn.close()
 

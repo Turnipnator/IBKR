@@ -140,13 +140,16 @@ def test_unknown_base_currency_says_base_rather_than_guessing_a_symbol(tmp_path)
 
 
 def test_deferral_line_is_in_pounds(tmp_path, caplog):
-    """This morning's line read '133 base of settled cash against 133 still to invest'."""
+    """This morning's line read '133 base of settled cash against 133 still to invest'.
+
+    Since 2026-10-06 a reserve below the order floor is reported as fully invested rather than as
+    a deferral (tests/test_sleeve_capital_and_funded.py); the amounts must still be in pounds.
+    """
     s, db = _sleeve(tmp_path, prices={"VUAA": 150.0})
     db.set_sleeve_month(s.month_key(), "VUAA", "pending_cash")
     with caplog.at_level(logging.INFO):
         s._fund_target(s.month_key(), "VUAA", retry=True)
-    assert "£133 of settled cash against £133 still to invest" in caplog.text
-    assert "below the £150 order floor" in caplog.text
+    assert "£133 left in cash is below the £150 order floor" in caplog.text
 
 
 def test_fill_log_and_telegram_are_in_pounds(tmp_path, caplog):

@@ -240,11 +240,21 @@ class SleeveStrategy:
         worth `min_topup_base`, unless it essentially finishes funding (>=85% of what is left), and is
         never placed below `min_order_base`.
 
-        Returns {"status": "placed" | "pending_cash" | "buy_failed", ...}; never raises. "placed"
+        Returns {"status": "placed" | "pending_cash" | "funded" | "buy_failed", ...}; never raises. "placed"
         means IBKR accepted the submission, NOT that it executed — the reserve moves only when
         `on_order_settled` hears what became of it.
         """
         reserve = self._uncommitted_reserve()
+        # Less left to invest than the smallest order the sleeve will place: no amount of settled
+        # cash can change that, so the job is done. Before 2026-10-06 this was reported as a
+        # deferral "waiting for more settled cash" — once a day, forever, at £133 of £133.
+        if reserve < self.config.min_order_base:
+            self._defer(
+                target, ("funded", round(reserve)),
+                f"Sleeve: {target} fully invested — {self._money(reserve)} left in cash is below the "
+                f"{self._money(self.config.min_order_base)} order floor, so no further order will be placed"
+            )
+            return {"status": "funded", "quantity": 0}
         spendable = self._spendable()
         # The daily hook asks on every loop pass, but settled cash only moves when proceeds settle. Two
         # cases defer whatever the share price is, so they are decided before fetching one:
@@ -392,7 +402,7 @@ class SleeveStrategy:
         out["status"] = funded["status"]
         # Fully invested already: nothing pending, so say so rather than leaving the month looking
         # like it is still waiting for cash.
-        if (out["status"] == "pending_cash" and self.positions().get(sig.target, 0) > 0
+        if (out["status"] in ("pending_cash", "funded") and self.positions().get(sig.target, 0) > 0
                 and self.reserve() < self.config.min_order_base):
             out["status"] = "already_held"
 
@@ -412,9 +422,10 @@ class SleeveStrategy:
         """Keep funding this month's target as cash settles — the daily half of the card's rule.
 
         Called on every loop pass during market hours, so it is guarded three ways: it does nothing
-        once the reserve is spent, nothing once a sleeve order has already gone in today (IBKR's
-        account summary is a lagging cache, so two orders in quick succession would both size off the
-        same stale settled-cash figure), and nothing for a month whose signal never resolved.
+        once what is left of the reserve is below the order floor, nothing once a sleeve order has
+        already gone in today (IBKR's account summary is a lagging cache, so two orders in quick
+        succession would both size off the same stale settled-cash figure), and nothing for a month
+        whose signal never resolved.
 
         An order IBKR REJECTED does not count as having gone in — it reached no book and consumed
         nothing, so it must not cost the rest of the day. `_fund_target` keeps that from looping by
@@ -433,7 +444,8 @@ class SleeveStrategy:
         target = state.get("target")
         if not target or state.get("status") in (None, "", "signal_failed", "dry_run"):
             return out
-        if self.reserve() <= 0:
+        # Fully invested (what is left is below the order floor): nothing to do and nothing to say.
+        if self._uncommitted_reserve() < self.config.min_order_base:
             return out
         try:
             if self.db.sleeve_orders_today():

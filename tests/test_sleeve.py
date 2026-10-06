@@ -653,7 +653,10 @@ def test_the_price_free_shortcut_never_changes_a_decision(tmp_path):
                 out = s._fund_target("2026-09", "VUAA", retry=True)
                 got = orders.placed[0][2] if orders.placed else 0
                 assert got == want, (reserve, available, price, got, want)
-                assert out["status"] == ("placed" if want else "pending_cash")
+                # Below the order floor nothing is left to wait for (2026-10-06): same decision,
+                # reported as funded instead of as a deferral.
+                done = reserve < s.config.min_order_base
+                assert out["status"] == ("placed" if want else "funded" if done else "pending_cash")
                 if not s.fetcher.price_calls:
                     shortcut += 1
                     assert want == 0, (reserve, available, price)
