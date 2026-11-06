@@ -1015,15 +1015,23 @@ class TradingBot:
                 self.notifier.notify_error(msg, "NLV reconcile")
         return drift
 
-    def _compute_session_pnl(self) -> tuple[float, float]:
+    def _compute_session_pnl(self, wait: bool = False) -> tuple[float, float]:
         """
         Today's realized + unrealized P&L (base currency).
 
         Realized: closed paper_trades dated today (paper mode) or IBKR
         RealizedPnL (live, BASE-currency row).
         Unrealized: dry_run uses the latest cached signal price as the mark;
-        falls back to best_price then entry. Live mode reads IBKR
-        UnrealizedPnL (BASE-currency row, i.e. converted to account base).
+        falls back to best_price then entry. Live mode returns TODAY's
+        unrealized move = IBKR reqPnL ``dailyPnL`` minus today's realized.
+
+        Live mode must NOT use the ``UnrealizedPnL`` account value: that is
+        unrealized since average cost, not today's change. Found 2026-11-06:
+        it read -£181 on the long-held sleeve while dailyPnL was -£41, so the
+        daily-loss gate was measuring the sleeve's paper loss since purchase
+        and was ~£3 from a false DAILY LOSS HALT. That lifetime figure is
+        used only as a loudly-logged fallback while the reqPnL subscription
+        has not delivered a value yet (first call / just after a reconnect).
         """
         realized = self.db.get_daily_pnl()
         unrealized = 0.0
@@ -1047,19 +1055,20 @@ class TradingBot:
                     unrealized += (entry - mark) * qty
         else:
             try:
-                accounts = self.connection.ib.managedAccounts() or []
+                ib = self.connection.ib
+                accounts = ib.managedAccounts() or []
                 if accounts:
                     # IBKR reports RealizedPnL/UnrealizedPnL once per holding
                     # currency PLUS a consolidated "BASE" row already converted to
                     # the account base currency (GBP here). Use BASE so the figure
                     # — and the max_daily_loss comparison — is in the right
-                    # currency. Previously this skipped BASE and grabbed the first
-                    # non-BASE row (USD), printing the raw USD number with a £ sign.
-                    # Fall back to the first non-BASE row only if BASE is absent,
-                    # so we never silently read 0 (which would fail unsafe).
+                    # currency. Fall back to the first non-BASE row only if BASE is
+                    # absent, so we never silently read 0 (which would fail unsafe).
+                    # RealizedPnL resets daily at IBKR; UnrealizedPnL does NOT (it is
+                    # since cost) and is only the fallback below.
                     base_real = base_unreal = None
                     fb_real = fb_unreal = None
-                    for v in self.connection.ib.accountValues(accounts[0]):
+                    for v in ib.accountValues(accounts[0]):
                         if v.tag not in ("RealizedPnL", "UnrealizedPnL"):
                             continue
                         try:
@@ -1080,14 +1089,67 @@ class TradingBot:
                         realized = base_real
                     elif fb_real is not None:
                         realized = fb_real
-                    if base_unreal is not None:
-                        unrealized = base_unreal
-                    elif fb_unreal is not None:
-                        unrealized = fb_unreal
+
+                    daily = self._daily_pnl_from_ibkr(accounts[0], wait=wait)
+                    if daily is not None:
+                        unrealized = daily - realized
+                    else:
+                        lifetime = base_unreal if base_unreal is not None else fb_unreal
+                        if lifetime is not None:
+                            unrealized = lifetime
+                            logger.warning(
+                                "Daily P&L: IBKR reqPnL has not delivered today's figure "
+                                "yet — falling back to unrealized SINCE COST "
+                                f"({lifetime:+,.2f}), which is not today's move"
+                            )
             except Exception as e:
                 logger.debug(f"Could not fetch IBKR PnL values: {e}")
 
         return realized, unrealized
+
+    def _daily_pnl_from_ibkr(self, account: str, wait: bool = False) -> Optional[float]:
+        """Today's account P&L (base currency) from IBKR's reqPnL subscription.
+
+        Starts the subscription on first use and again after a reconnect
+        (ib_insync's wrapper drops subscriptions on disconnect). reqPnL only
+        sends a request — it does not run the event loop — so this is safe
+        from event handlers and the Telegram status path. Returns None until
+        IBKR has pushed a value (dailyPnL is NaN until then). ``wait=True``
+        polls up to ~3s with ib.sleep — only from the main loop (the daily-loss
+        gate), never from an event handler or the Telegram status path.
+        """
+        ib = self.connection.ib
+        subs = [p for p in ib.pnl(account) if not p.modelCode]
+        if not subs:
+            try:
+                ib.reqPnL(account)
+                logger.info(f"Subscribed to reqPnL for {account} (daily-loss gate)")
+            except AssertionError:
+                pass  # already requested, value not in yet
+            subs = [p for p in ib.pnl(account) if not p.modelCode]
+        val = self._first_valid_daily(subs)
+        if val is None and wait:
+            for _ in range(6):
+                ib.sleep(0.5)
+                val = self._first_valid_daily(subs)
+                if val is not None:
+                    break
+        return val
+
+    @staticmethod
+    def _first_valid_daily(subs) -> Optional[float]:
+        for p in subs:
+            val = p.dailyPnL
+            if val is None:
+                continue
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                continue
+            if val != val or abs(val) > 1e300:  # NaN / UNSET_DOUBLE
+                continue
+            return val
+        return None
 
     def _check_daily_loss(self) -> bool:
         """
@@ -1107,7 +1169,7 @@ class TradingBot:
             logger.info(f"Daily-loss halt cleared (was {self._daily_loss_halt_date})")
             self._daily_loss_halt_date = None
 
-        realized, unrealized = self._compute_session_pnl()
+        realized, unrealized = self._compute_session_pnl(wait=True)
         session = realized + unrealized
         limit = -abs(trading_config.max_daily_loss)
         cur = currency_symbol(self._get_base_currency())
